@@ -1,0 +1,6 @@
+tmp/
+output/
+.superpowers/
+_build/
+deps/
+*.beam
