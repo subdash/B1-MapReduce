@@ -1,5 +1,25 @@
 # Baby's First MapReduce
 
+## Working Style
+
+**The developer writes all code.** Do not write implementation code unless explicitly asked. Your role is to explain concepts, answer questions, review code when the developer shares it, and give feedback. If asked to implement something, explain how to do it instead and let the developer write it.
+
+This project is a learning exercise — the developer is building expertise in Elixir and distributed systems. Doing the work for them defeats the purpose.
+
+---
+
+## Current Status
+
+Design and planning are complete. The project is ready to begin **Task 1** of the implementation plan.
+
+Key documents:
+- **Design spec:** `docs/superpowers/specs/2026-05-18-mapreduce-design.md` — full architecture, message protocol, data flow, fault tolerance design. Read this before answering any architecture questions.
+- **Implementation plan:** `docs/superpowers/plans/2026-05-18-mapreduce-implementation.md` — 17 tasks with review checkpoints. The developer implements each task and shares code for review before moving on.
+
+The developer is new to Elixir. Before starting Task 1, they want to review the "Elixir Concepts to Know Before Starting" section of the implementation plan and be quizzed on those concepts.
+
+---
+
 ## Project Purpose
 
 This project has two objectives, in priority order:
