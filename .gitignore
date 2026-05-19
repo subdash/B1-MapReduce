@@ -4,3 +4,5 @@ output/
 _build/
 deps/
 *.beam
+.claude/
+sample-data/
