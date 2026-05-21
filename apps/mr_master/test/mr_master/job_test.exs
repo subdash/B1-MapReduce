@@ -4,7 +4,8 @@ defmodule JobTest do
   use ExUnit.Case, async: true
 
   @tag :tmp_dir
-  test "A new MapTask struct can be updated using the struct update syntax", %{tmp_dir: tmp_dir} do
+  test "MrMaster.Job.create_map_tasks creates idle map tasks with file names assigned and sequential ids",
+       %{tmp_dir: tmp_dir} do
     create_file = fn index ->
       path = Path.join(tmp_dir, "file#{index}")
       File.write!(path, "")

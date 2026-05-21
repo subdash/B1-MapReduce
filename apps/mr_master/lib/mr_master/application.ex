@@ -10,6 +10,7 @@ defmodule MrMaster.Application do
     children = [
       # Starts a worker by calling: MrMaster.Worker.start_link(arg)
       # {MrMaster.Worker, arg}
+      {MrMaster.Master, name: MrMaster.Master}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
