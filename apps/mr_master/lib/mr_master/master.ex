@@ -1,5 +1,6 @@
 defmodule MrMaster.Master do
   use GenServer
+  require Logger
 
   defstruct workers: %{},
             map_tasks: %{},
@@ -7,7 +8,9 @@ defmodule MrMaster.Master do
             intermediate_locations: %{},
             task_module: nil,
             num_reducers: 0,
-            phase: :waiting
+            phase: :waiting,
+            start_time: nil,
+            input_dir: nil
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -43,11 +46,27 @@ defmodule MrMaster.Master do
       :map_tasks => map_tasks_hashmap,
       :phase => :mapping,
       :num_reducers => opts.num_reducers,
-      :task_module => opts.task_module
+      :task_module => opts.task_module,
+      :start_time => System.monotonic_time(:millisecond),
+      :input_dir => opts.input_dir
     }
 
     updated_state = Map.merge(state, state_updates)
-    # Assign pending tasks since we now have a new MapReduce job 
+
+    # Log job started
+    task_name =
+      try do
+        opts.task_module |> Module.split() |> List.last()
+      rescue
+        ArgumentError ->
+          if is_nil(opts.task_module), do: "unknown", else: Atom.to_string(opts.task_module)
+      end
+
+    Logger.info(
+      "[master] job_started | task=#{task_name} files=#{map_size(map_tasks_hashmap)} reducers=#{opts.num_reducers} workers=#{map_size(state.workers)}"
+    )
+
+    # Assign pending tasks since we now have a new MapReduce job
     final_state = assign_pending_tasks(updated_state)
     {:reply, :ok, final_state}
   end
@@ -77,6 +96,34 @@ defmodule MrMaster.Master do
   end
 
   @impl true
+  def handle_cast({:reduce_done, task_id}, state) do
+    %MrProtocol.ReduceTask{} = task = state.reduce_tasks[task_id]
+    %MrProtocol.WorkerInfo{} = worker = state.workers[task.assigned_to]
+    # Mark task as completed
+    state = put_in(state.reduce_tasks[task_id], %MrProtocol.ReduceTask{task | status: :completed})
+    state = put_in(state.workers[worker.node], %MrProtocol.WorkerInfo{worker | status: :idle})
+    state = assign_pending_tasks(state)
+
+    reduce_phase_complete =
+      Enum.all?(Map.values(state.reduce_tasks), fn %MrProtocol.ReduceTask{} = reduce_task ->
+        reduce_task.status == :completed
+      end)
+
+    if reduce_phase_complete do
+      state = %{state | phase: :done}
+      duration = System.monotonic_time(:millisecond) - state.start_time
+
+      Logger.info(
+        "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
+      )
+
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info(_status, state) do
     {:noreply, state}
   end
@@ -95,7 +142,7 @@ defmodule MrMaster.Master do
          idle_worker_node <- MrMaster.Scheduler.assign_map_task(state.workers),
          # Find the corresponding worker to the node
          %MrProtocol.WorkerInfo{} = idle_worker <- state.workers[idle_worker_node] do
-      # Assign the task to the worker node 
+      # Assign the task to the worker node
       task_assigned = %MrProtocol.MapTask{
         idle_map_task
         | assigned_to: idle_worker_node,
@@ -107,6 +154,11 @@ defmodule MrMaster.Master do
         idle_worker
         | status: :busy
       }
+
+      # Log task assignment
+      Logger.info(
+        "[master] task_assigned | type=map id=#{task_assigned.id} worker=#{idle_worker_node} dist=N/A"
+      )
 
       # Update state
       updated_state = put_in(state.map_tasks[task_assigned.id], task_assigned)
@@ -144,6 +196,20 @@ defmodule MrMaster.Master do
         idle_worker
         | status: :busy
       }
+
+      # Calculate mean distance to all map worker nodes
+      distances =
+        Enum.map(reduce_worker_nodes, fn map_node ->
+          map_worker_coords = state.workers[map_node].coords
+          MrMaster.Scheduler.distance(idle_worker.coords, map_worker_coords)
+        end)
+
+      mean_distance = Enum.sum(distances) / length(distances)
+
+      # Log task assignment
+      Logger.info(
+        "[master] task_assigned | type=reduce id=#{task_assigned.id} worker=#{idle_worker_node} dist=#{Float.round(mean_distance, 1)}"
+      )
 
       # Update state
       updated_state = put_in(state.reduce_tasks[task_assigned.id], task_assigned)

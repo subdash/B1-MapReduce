@@ -101,4 +101,88 @@ defmodule MasterTest do
     assert reduce_task.bucket == 0
     assert {worker_node, bucket_locations[0]} in reduce_task.locations
   end
+
+  @tag :tmp_dir
+  test "phase transitions to done after a full MapReduce job", %{
+    tmp_dir: tmp_dir
+  } do
+    file_path = Path.join(tmp_dir, "single_file")
+    File.write!(file_path, "")
+
+    worker_info = %MrProtocol.WorkerInfo{
+      :node => :worker1@localhost,
+      :coords => {0.1, 2.3}
+    }
+
+    job_opts = %{
+      :input_dir => tmp_dir,
+      :num_reducers => 1,
+      :task_module => :fake_task2
+    }
+
+    GenServer.call({MrMaster.Master, node()}, {:register, worker_info})
+    GenServer.call({MrMaster.Master, node()}, {:submit_job, job_opts})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    [{task_id, task}] = Map.to_list(state.map_tasks)
+    worker_node = task.assigned_to
+    worker_id = worker_node |> Atom.to_string() |> String.split("@") |> List.first()
+
+    bucket_locations =
+      for bucket <- 0..(state.num_reducers - 1), into: %{} do
+        bucket_path = "/tmp/#{worker_id}/bucket-#{bucket}.bin"
+        {bucket, bucket_path}
+      end
+
+    GenServer.cast({MrMaster.Master, node()}, {:map_done, task_id, bucket_locations})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    [{task_id, _task}] = Map.to_list(state.reduce_tasks)
+    GenServer.cast({MrMaster.Master, node()}, {:reduce_done, task_id})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    assert state.phase == :done
+  end
+
+  @tag :tmp_dir
+  test "phase remains reducing while some tasks are still in progress", %{tmp_dir: tmp_dir} do
+    file_path = Path.join(tmp_dir, "single_file")
+    File.write!(file_path, "")
+
+    worker_info = %MrProtocol.WorkerInfo{
+      node: :worker1@localhost,
+      coords: {0.1, 2.3}
+    }
+
+    job_opts = %{
+      input_dir: tmp_dir,
+      num_reducers: 2,
+      task_module: :fake_task3
+    }
+
+    GenServer.call({MrMaster.Master, node()}, {:register, worker_info})
+    GenServer.call({MrMaster.Master, node()}, {:submit_job, job_opts})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+
+    # Complete the single map task
+    [{task_id, task}] = Map.to_list(state.map_tasks)
+    worker_id = task.assigned_to |> Atom.to_string() |> String.split("@") |> List.first()
+
+    bucket_locations =
+      for bucket <- 0..(state.num_reducers - 1), into: %{} do
+        {bucket, "/tmp/#{worker_id}/bucket-#{bucket}.bin"}
+      end
+
+    GenServer.cast({MrMaster.Master, node()}, {:map_done, task_id, bucket_locations})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    assert state.phase == :reducing
+    assert map_size(state.reduce_tasks) == 2
+
+    # Find the one reduce task that is in_progress (assigned to our worker)
+    {reduce_task_id, _} =
+      Enum.find(state.reduce_tasks, fn {_id, t} -> t.status == :in_progress end)
+
+    # Complete only that one task — one of two is still pending
+    GenServer.cast({MrMaster.Master, node()}, {:reduce_done, reduce_task_id})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+
+    assert state.phase == :reducing
+  end
 end
