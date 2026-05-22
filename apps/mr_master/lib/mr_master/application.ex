@@ -7,11 +7,11 @@ defmodule MrMaster.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      # Starts a worker by calling: MrMaster.Worker.start_link(arg)
-      # {MrMaster.Worker, arg}
-      {MrMaster.Master, name: MrMaster.Master}
-    ]
+    children = if Application.get_env(:mr_master, :start_master, true) do
+      [{MrMaster.Master, name: MrMaster.Master}]
+    else
+      []
+    end
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options

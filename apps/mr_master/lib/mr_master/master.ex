@@ -53,7 +53,26 @@ defmodule MrMaster.Master do
   end
 
   @impl true
-  def handle_cast(_opts, state) do
+  def handle_cast({:map_done, task_id, bucket_locations}, state) do
+    # Mark task as completed
+    %MrProtocol.MapTask{} = completed_task = state.map_tasks[task_id]
+    completed_task = %MrProtocol.MapTask{completed_task | status: :completed}
+    # Mark worker as idle
+    %MrProtocol.WorkerInfo{} = idle_worker = state.workers[completed_task.assigned_to]
+
+    idle_worker = %MrProtocol.WorkerInfo{
+      idle_worker
+      | status: :idle
+    }
+
+    # Update state with completed task, idle worker and bucket locations
+    state = put_in(state.map_tasks[task_id], completed_task)
+    state = put_in(state.intermediate_locations[task_id], bucket_locations)
+    state = put_in(state.workers[completed_task.assigned_to], idle_worker)
+    # Assign any pending map tasks
+    state = assign_pending_tasks(state)
+    state = maybe_start_reduce(state)
+
     {:noreply, state}
   end
 
@@ -79,14 +98,14 @@ defmodule MrMaster.Master do
       # Assign the task to the worker node 
       task_assigned = %MrProtocol.MapTask{
         idle_map_task
-        | :assigned_to => idle_worker_node,
-          :status => :in_progress
+        | assigned_to: idle_worker_node,
+          status: :in_progress
       }
 
       # Update the worker as busy
       worker_assigned = %MrProtocol.WorkerInfo{
         idle_worker
-        | :status => :busy
+        | status: :busy
       }
 
       # Update state
@@ -113,17 +132,17 @@ defmodule MrMaster.Master do
          idle_worker_node <-
            MrMaster.Scheduler.assign_reduce_task(state.workers, reduce_worker_nodes),
          %MrProtocol.WorkerInfo{} = idle_worker <- state.workers[idle_worker_node] do
-      # Assign the task to the worker node 
+      # Assign the task to the worker node
       task_assigned = %MrProtocol.ReduceTask{
         idle_reduce_task
-        | :assigned_to => idle_worker_node,
-          :status => :in_progress
+        | assigned_to: idle_worker_node,
+          status: :in_progress
       }
 
       # Update the worker as busy
       worker_assigned = %MrProtocol.WorkerInfo{
         idle_worker
-        | :status => :busy
+        | status: :busy
       }
 
       # Update state
@@ -141,5 +160,48 @@ defmodule MrMaster.Master do
   defp assign_pending_tasks(state) do
     # catch-all for :waiting or :done — just return unchanged
     state
+  end
+
+  defp maybe_start_reduce(state) do
+    map_task_is_complete = fn %MrProtocol.MapTask{} = map_task ->
+      map_task.status == :completed
+    end
+
+    # Only transition to reduce phase if all map tasks are complete.
+    if Enum.all?(Map.values(state.map_tasks), map_task_is_complete) do
+      # Otherwise we can move on to the reducing phase of the MapReduce task.
+      # First we iterate over all bucket indexes
+      reduce_tasks =
+        for bucket <- 0..(state.num_reducers - 1) do
+          # Get the intermediate file locations -- the output from the map tasks
+          locations =
+            for {task_id, task} <- state.map_tasks do
+              case Map.fetch(state.intermediate_locations, task_id) do
+                {:ok, bucket_map} ->
+                  {task.assigned_to, bucket_map[bucket]}
+
+                :error ->
+                  raise "BUG: map task #{task_id} is completed but has no intermediate locations"
+              end
+            end
+
+          # Construct a reduce task -- we can reuse the bucket index as the task id
+          # and bucket id
+          %MrProtocol.ReduceTask{
+            id: bucket,
+            bucket: bucket,
+            locations: locations
+          }
+        end
+
+      # Convert the list to a mapping of task id to the task definition itself
+      reduce_tasks_map = Map.new(reduce_tasks, fn task -> {task.id, task} end)
+      # Load the tasks into the state and set the state to :reducing
+      updated_state = %{state | reduce_tasks: reduce_tasks_map, phase: :reducing}
+      # Assign the reduce tasks
+      assign_pending_tasks(updated_state)
+    else
+      state
+    end
   end
 end
