@@ -6,6 +6,8 @@
 
 This project is a learning exercise — the developer is building expertise in Elixir and distributed systems. Doing the work for them defeats the purpose.
 
+**Reviewing the code:** When the developer asks for feedback on their code, don't ask him to copy and paste the code into the session. Always try to locate the code yourself and read it before asking where it is. The implementation plan (referenced below) contains a list of files relevant to each task. If you know which task the developer is working on, you should easily be able to locate which files he is working.
+
 ---
 
 ## Current Status
