@@ -124,6 +124,67 @@ defmodule MrMaster.Master do
   end
 
   @impl true
+  def handle_cast({:set_throttle, node, multiplier}, state) do
+    %MrProtocol.WorkerInfo{} = worker = state.workers[node]
+
+    state =
+      put_in(state.workers[node], %MrProtocol.WorkerInfo{worker | throttle_multiplier: multiplier})
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:nodedown, node}, state) do
+    %MrProtocol.WorkerInfo{} = worker = state.workers[node]
+    dead_worker = %MrProtocol.WorkerInfo{worker | status: :dead}
+    state = put_in(state.workers[node], dead_worker)
+
+    # Update all map tasks assigned to the node which are in progress or completed,
+    # as well as any reduce tasks in progress assigned to the node. Set them as idle
+    # and remove the assignee so that they can be retried.
+    updated_map_tasks =
+      Map.new(state.map_tasks, fn {task_id, task} ->
+        %MrProtocol.MapTask{} = task
+
+        if task.assigned_to == node and task.status in [:in_progress, :completed] do
+          {task_id, %MrProtocol.MapTask{task | status: :idle, assigned_to: nil}}
+        else
+          {task_id, task}
+        end
+      end)
+
+    num_updated_map_tasks =
+      Enum.count(state.map_tasks, fn {_task_id, task} ->
+        task.assigned_to == node and task.status in [:in_progress, :completed]
+      end)
+
+    updated_reduce_tasks =
+      Map.new(state.reduce_tasks, fn {task_id, task} ->
+        %MrProtocol.ReduceTask{} = task
+
+        if task.assigned_to == node and task.status == :in_progress do
+          {task_id, %MrProtocol.ReduceTask{task | status: :idle, assigned_to: nil}}
+        else
+          {task_id, task}
+        end
+      end)
+
+    num_updated_reduce_tasks =
+      Enum.count(state.reduce_tasks, fn {_task_id, task} ->
+        task.assigned_to == node and task.status == :in_progress
+      end)
+
+    state = put_in(state.map_tasks, updated_map_tasks)
+    state = put_in(state.reduce_tasks, updated_reduce_tasks)
+    # Reassign tasks
+    state = assign_pending_tasks(state)
+    tasks_updated = num_updated_map_tasks + num_updated_reduce_tasks
+    Logger.info("[master] node_down | node=#{node} requeued=#{tasks_updated}")
+
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(_status, state) do
     {:noreply, state}
   end
