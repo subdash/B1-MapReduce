@@ -5,6 +5,7 @@ defmodule MrMaster.Master do
   defstruct workers: %{},
             map_tasks: %{},
             reduce_tasks: %{},
+            backup_tasks: %{},
             intermediate_locations: %{},
             task_module: nil,
             num_reducers: 0,
@@ -19,6 +20,7 @@ defmodule MrMaster.Master do
   @impl true
   def init(_opts) do
     :net_kernel.monitor_nodes(true)
+    Process.send_after(self(), :check_stragglers, 10_000)
     {:ok, %__MODULE__{}}
   end
 
@@ -73,53 +75,105 @@ defmodule MrMaster.Master do
 
   @impl true
   def handle_cast({:map_done, task_id, bucket_locations}, state) do
-    # Mark task as completed
-    %MrProtocol.MapTask{} = completed_task = state.map_tasks[task_id]
-    completed_task = %MrProtocol.MapTask{completed_task | status: :completed}
-    # Mark worker as idle
-    %MrProtocol.WorkerInfo{} = idle_worker = state.workers[completed_task.assigned_to]
+    # If primary task is completed already, that means a bakcup map task
+    # just sent its :map_done message. We must mark the backup task as completed.
+    if state.map_tasks[task_id].status == :completed do
+      state =
+        case Map.fetch(state.backup_tasks, {:map, task_id}) do
+          {:ok, backup_node} ->
+            # Find worker assigned to backup task
+            %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
 
-    idle_worker = %MrProtocol.WorkerInfo{
-      idle_worker
-      | status: :idle
-    }
+            # Mark worker as idle in worker registry
+            state =
+              put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
+                backup_worker
+                | status: :idle
+              })
 
-    # Update state with completed task, idle worker and bucket locations
-    state = put_in(state.map_tasks[task_id], completed_task)
-    state = put_in(state.intermediate_locations[task_id], bucket_locations)
-    state = put_in(state.workers[completed_task.assigned_to], idle_worker)
-    # Assign any pending map tasks
-    state = assign_pending_tasks(state)
-    state = maybe_start_reduce(state)
+            # Remove the task from backup_tasks
+            state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:map, task_id}))
+            assign_pending_tasks(state)
 
-    {:noreply, state}
+          :error ->
+            state
+        end
+
+      {:noreply, state}
+    else
+      # The primary (rather than backup) map task completed.
+      # Mark the task as completed in the map tasks dictionary.
+      %MrProtocol.MapTask{} = completed_task = state.map_tasks[task_id]
+      completed_task = %MrProtocol.MapTask{completed_task | status: :completed}
+      # Mark worker as idle
+      %MrProtocol.WorkerInfo{} = idle_worker = state.workers[completed_task.assigned_to]
+
+      idle_worker = %MrProtocol.WorkerInfo{
+        idle_worker
+        | status: :idle
+      }
+
+      # Update state with completed task, idle worker and bucket locations
+      state = put_in(state.map_tasks[task_id], completed_task)
+      state = put_in(state.intermediate_locations[task_id], bucket_locations)
+      state = put_in(state.workers[completed_task.assigned_to], idle_worker)
+      # Assign any pending map tasks
+      state = assign_pending_tasks(state)
+      state = maybe_start_reduce(state)
+
+      {:noreply, state}
+    end
   end
 
   @impl true
   def handle_cast({:reduce_done, task_id}, state) do
-    %MrProtocol.ReduceTask{} = task = state.reduce_tasks[task_id]
-    %MrProtocol.WorkerInfo{} = worker = state.workers[task.assigned_to]
-    # Mark task as completed
-    state = put_in(state.reduce_tasks[task_id], %MrProtocol.ReduceTask{task | status: :completed})
-    state = put_in(state.workers[worker.node], %MrProtocol.WorkerInfo{worker | status: :idle})
-    state = assign_pending_tasks(state)
+    if state.reduce_tasks[task_id].status == :completed do
+      state =
+        case Map.fetch(state.backup_tasks, {:reduce, task_id}) do
+          {:ok, backup_node} ->
+            %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
 
-    reduce_phase_complete =
-      Enum.all?(Map.values(state.reduce_tasks), fn %MrProtocol.ReduceTask{} = reduce_task ->
-        reduce_task.status == :completed
-      end)
+            state =
+              put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
+                backup_worker
+                | status: :idle
+              })
 
-    if reduce_phase_complete do
-      state = %{state | phase: :done}
-      duration = System.monotonic_time(:millisecond) - state.start_time
+            state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:reduce, task_id}))
+            assign_pending_tasks(state)
 
-      Logger.info(
-        "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
-      )
+          :error ->
+            state
+        end
 
       {:noreply, state}
     else
-      {:noreply, state}
+      %MrProtocol.ReduceTask{} = task = state.reduce_tasks[task_id]
+      %MrProtocol.WorkerInfo{} = worker = state.workers[task.assigned_to]
+      # Mark task as completed
+      state =
+        put_in(state.reduce_tasks[task_id], %MrProtocol.ReduceTask{task | status: :completed})
+
+      state = put_in(state.workers[worker.node], %MrProtocol.WorkerInfo{worker | status: :idle})
+      state = assign_pending_tasks(state)
+
+      reduce_phase_complete =
+        Enum.all?(Map.values(state.reduce_tasks), fn %MrProtocol.ReduceTask{} = reduce_task ->
+          reduce_task.status == :completed
+        end)
+
+      if reduce_phase_complete do
+        state = %{state | phase: :done}
+        duration = System.monotonic_time(:millisecond) - state.start_time
+
+        Logger.info(
+          "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
+        )
+
+        {:noreply, state}
+      else
+        {:noreply, state}
+      end
     end
   end
 
@@ -185,8 +239,90 @@ defmodule MrMaster.Master do
   end
 
   @impl true
+  def handle_info(:check_stragglers, %{phase: :mapping} = state) do
+    # Reschedule timer
+    Process.send_after(self(), :check_stragglers, 10_000)
+    total_tasks = map_size(state.map_tasks)
+    completed_tasks = Enum.count(state.map_tasks, fn {_, t} -> t.status == :completed end)
+
+    if total_tasks > 0 and completed_tasks / total_tasks > 0.8 do
+      {:noreply, assign_backup_tasks(state, :map)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:check_stragglers, %{phase: :reducing} = state) do
+    # Reschedule timer
+    Process.send_after(self(), :check_stragglers, 10_000)
+    total_tasks = map_size(state.reduce_tasks)
+    completed_tasks = Enum.count(state.reduce_tasks, fn {_, t} -> t.status == :completed end)
+
+    if total_tasks > 0 and completed_tasks / total_tasks > 0.8 do
+      {:noreply, assign_backup_tasks(state, :reduce)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+
+  def handle_info(:check_stragglers, %{phase: :done} = state) do
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:check_stragglers, state) do
+    Process.send_after(self(), :check_stragglers, 10_000)
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(_status, state) do
     {:noreply, state}
+  end
+
+  defp assign_backup_tasks(state, :map = type) do
+    with {node, %MrProtocol.WorkerInfo{} = worker_info} <-
+           Enum.find(state.workers, nil, fn {_node, worker} -> worker.status == :idle end),
+         {task_id, task} <-
+           Enum.find(state.map_tasks, nil, fn {task_id, task} ->
+             task.status == :in_progress and
+               not Map.has_key?(state.backup_tasks, {type, task_id})
+           end) do
+      state = put_in(state.backup_tasks[{type, task_id}], node)
+      state = put_in(state.workers[node], %MrProtocol.WorkerInfo{worker_info | status: :busy})
+
+      Logger.info(
+        "[master] backup_launched | task=map:#{task_id} primary=#{task.assigned_to} backup=#{node}"
+      )
+
+      assign_backup_tasks(state, type)
+    else
+      _ -> state
+    end
+  end
+
+  defp assign_backup_tasks(state, :reduce = type) do
+    with {node, %MrProtocol.WorkerInfo{} = worker_info} <-
+           Enum.find(state.workers, nil, fn {_node, worker} -> worker.status == :idle end),
+         {task_id, task} <-
+           Enum.find(state.reduce_tasks, nil, fn {task_id, task} ->
+             task.status == :in_progress and
+               not Map.has_key?(state.backup_tasks, {type, task_id})
+           end) do
+      state = put_in(state.backup_tasks[{type, task_id}], node)
+      state = put_in(state.workers[node], %MrProtocol.WorkerInfo{worker_info | status: :busy})
+
+      Logger.info(
+        "[master] backup_launched | task=reduce:#{task_id} primary=#{task.assigned_to} backup=#{node}"
+      )
+
+      assign_backup_tasks(state, type)
+    else
+      _ -> state
+    end
   end
 
   defp assign_pending_tasks(%{phase: :mapping} = state) do

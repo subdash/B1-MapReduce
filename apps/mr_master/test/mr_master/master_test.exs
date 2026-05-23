@@ -162,6 +162,78 @@ defmodule MasterTest do
   end
 
   @tag :tmp_dir
+  test "backup tasks are assigned when there are stragglers", %{tmp_dir: tmp_dir} do
+    # Setup workers and job
+    create_files(tmp_dir, 6)
+    w1 = worker_info(:worker1@localhost)
+    w2 = worker_info(:worker2@localhost)
+
+    GenServer.call({MrMaster.Master, node()}, {:register, w1})
+    GenServer.call({MrMaster.Master, node()}, {:register, w2})
+
+    GenServer.call(
+      {MrMaster.Master, node()},
+      {:submit_job, job_opts(tmp_dir, task_module: :fake_task3, num_reducers: 6)}
+    )
+
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+
+    # Find map task assigned to worker 1
+    {w1_task_id, _w1_task} =
+      Enum.find(state.map_tasks, fn {_id, t} -> t.assigned_to == :worker1@localhost end)
+
+    for _ <- 0..4 do
+      state = GenServer.call({MrMaster.Master, node()}, :get_state)
+
+      # Complete every task assigned to worker 2
+      {w2_task_id, _w2_task} =
+        Enum.find(state.map_tasks, fn {_id, t} ->
+          t.assigned_to == :worker2@localhost and t.status == :in_progress
+        end)
+
+      locs = bucket_locations(w2.node, state.num_reducers)
+      GenServer.cast({MrMaster.Master, node()}, {:map_done, w2_task_id, locs})
+    end
+
+    # At this point, >80% of map tasks have been completed, so we assign a backup
+    # task that worker 2 can take on, the same task worker 1 is on.
+    Process.send(GenServer.whereis(MrMaster.Master), :check_stragglers, [])
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    assert state.map_tasks[w1_task_id].status == :in_progress
+    assert Map.has_key?(state.backup_tasks, {:map, w1_task_id})
+    assert state.backup_tasks[{:map, w1_task_id}] == w2.node
+    # Mark the task as complete
+    locs = bucket_locations(w1.node, state.num_reducers)
+    GenServer.cast({MrMaster.Master, node()}, {:map_done, w1_task_id, locs})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    locs = bucket_locations(w2.node, state.num_reducers)
+    GenServer.cast({MrMaster.Master, node()}, {:map_done, w1_task_id, locs})
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    assert state.phase == :reducing
+    # Find reduce task assigned to worker 1
+    {w1_task_id, _w1_task} =
+      Enum.find(state.reduce_tasks, fn {_id, t} -> t.assigned_to == :worker1@localhost end)
+
+    for _ <- 0..4 do
+      state = GenServer.call({MrMaster.Master, node()}, :get_state)
+
+      # Complete every task assigned to worker 2
+      {w2_task_id, _w2_task} =
+        Enum.find(state.reduce_tasks, fn {_id, t} ->
+          t.assigned_to == :worker2@localhost and t.status == :in_progress
+        end)
+
+      GenServer.cast({MrMaster.Master, node()}, {:reduce_done, w2_task_id})
+    end
+
+    Process.send(GenServer.whereis(MrMaster.Master), :check_stragglers, [])
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    assert state.reduce_tasks[w1_task_id].status == :in_progress
+    assert Map.has_key?(state.backup_tasks, {:reduce, w1_task_id})
+    assert state.backup_tasks[{:reduce, w1_task_id}] == w2.node
+  end
+
+  @tag :tmp_dir
   test "set_throttle updates throttle_multiplier in the worker registry", %{tmp_dir: tmp_dir} do
     create_files(tmp_dir, 1)
     w1 = worker_info(:worker1@localhost)
