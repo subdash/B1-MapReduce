@@ -396,7 +396,7 @@ defmodule MrMaster.Master do
       distances =
         Enum.map(reduce_worker_nodes, fn map_node ->
           map_worker_coords = state.workers[map_node].coords
-          MrMaster.Scheduler.distance(idle_worker.coords, map_worker_coords)
+          MrProtocol.Distance.euclidean_distance(idle_worker.coords, map_worker_coords)
         end)
 
       mean_distance = Enum.sum(distances) / length(distances)

@@ -1,14 +1,4 @@
 defmodule MrMaster.Scheduler do
-  def distance(coords1, coords2) do
-    {x1, y1} = coords1
-    {x2, y2} = coords2
-    xdelta = x2 - x1
-    ydelta = y2 - y1
-    # Return Euclidean distance: the square root of the sum
-    # of the squares of the x and y deltas 
-    :math.sqrt(:math.pow(xdelta, 2) + :math.pow(ydelta, 2))
-  end
-
   def assign_map_task(workers) do
     case Enum.find(workers, fn {_node, worker} ->
            worker.status == :idle
@@ -34,7 +24,7 @@ defmodule MrMaster.Scheduler do
       distances =
         Enum.map(map_worker_nodes, fn map_node ->
           map_worker_coords = workers[map_node].coords
-          distance(worker_info.coords, map_worker_coords)
+          MrProtocol.Distance.euclidean_distance(worker_info.coords, map_worker_coords)
         end)
 
       mean_distance = Enum.sum(distances) / length(distances)
