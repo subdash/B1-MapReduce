@@ -1,5 +1,8 @@
-defmodule MrWorker.Task.WordCount do
-  def map(filename, line) do
+defmodule MrWorker.Tasks.WordCount do
+  @behaviour MrProtocol.Task
+
+  def map(_filename, line) do
+    line |> String.split() |> Enum.map(fn word -> {word, 1} end)
   end
 
   def reduce(word, counts) do
