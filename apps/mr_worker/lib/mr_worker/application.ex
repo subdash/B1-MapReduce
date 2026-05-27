@@ -8,6 +8,7 @@ defmodule MrWorker.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      MrWorker.FileServer
       # Starts a worker by calling: MrWorker.Worker.start_link(arg)
       # {MrWorker.Worker, arg}
     ]

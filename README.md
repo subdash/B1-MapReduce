@@ -1,5 +1,5 @@
 # Baby's First MapReduce
-This is an implementation of the MapReduce programming model as defined in the 2004 paper [_MapReduce: Simplified Data Process on Large Clusters_](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf). 
+This is an implementation of the MapReduce programming model as defined in the 2004 paper [_MapReduce: Simplified Data Processing on Large Clusters_](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf). 
 
 ## AI disclaimer
 Claude Code was used in the development of this project for the following tasks:

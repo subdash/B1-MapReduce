@@ -14,6 +14,7 @@ defmodule MrWorker.FileServer do
     case File.read(file_path) do
       {:ok, binary} -> {:reply, binary, state}
       {:error, :enoent} -> {:reply, {:error, :not_found}, state}
+      _ -> {:reply, {:error, :unexpected}, state}
     end
   end
 end
