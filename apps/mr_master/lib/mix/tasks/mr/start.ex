@@ -74,18 +74,19 @@ defmodule Mix.Tasks.Mr.Start do
         Logger.warning("[master] Dashboard failed to start: #{inspect(reason)} — continuing without it")
     end
 
-    # Start worker processes
-    Enum.each(1..workers, fn worker_num ->
-      worker_name = "worker#{worker_num}@127.0.0.1"
-      x = Enum.random(0..99) * 1.0
-      y = Enum.random(0..99) * 1.0
-      env_vars = "MR_START_MASTER=false MR_COORDS=#{x},#{y}"
+    # Start worker processes — keep port handles so we can kill workers on shutdown
+    ports =
+      Enum.map(1..workers, fn worker_num ->
+        worker_name = "worker#{worker_num}@127.0.0.1"
+        x = Enum.random(0..99) * 1.0
+        y = Enum.random(0..99) * 1.0
+        env_vars = "MR_START_MASTER=false MR_COORDS=#{x},#{y}"
 
-      command =
-        "sh -c '#{env_vars} elixir --name #{worker_name} --cookie secret -S mix run --no-halt'"
+        command =
+          "sh -c '#{env_vars} elixir --name #{worker_name} --cookie secret -S mix run --no-halt'"
 
-      Port.open({:spawn, command}, [])
-    end)
+        Port.open({:spawn, command}, [])
+      end)
 
     wait_for_workers(workers)
 
@@ -117,8 +118,34 @@ defmodule Mix.Tasks.Mr.Start do
     Logger.info("=== MapReduce Job Complete ===")
     Logger.info("Duration: #{Float.round(duration_sec, 1)} seconds")
     Logger.info("Results written to output/: #{output_files}")
+
+    shutdown_workers(ports)
+
     Logger.info("Dashboard still available at http://localhost:4000 — Ctrl+C to exit")
     Process.sleep(:infinity)
+  end
+
+  # Gracefully shut down all worker nodes so their names are freed in epmd before
+  # the master exits. Uses OTP's :init.stop/0 via RPC as the primary mechanism
+  # (clean deregistration), then closes the OS-level ports as a fallback for any
+  # workers that crashed and are no longer reachable via Erlang distribution.
+  defp shutdown_workers(ports) do
+    connected = Node.list()
+    Logger.info("[master] Shutting down #{length(connected)} worker node(s)...")
+
+    Enum.each(connected, fn node ->
+      :rpc.cast(node, :init, :stop, [])
+    end)
+
+    # Give workers time to deregister from epmd before we exit
+    Process.sleep(2_000)
+
+    # Fallback: close OS-level ports for any workers that didn't respond
+    Enum.each(ports, fn port ->
+      if Port.info(port) != nil, do: Port.close(port)
+    end)
+
+    Logger.info("[master] Workers shut down.")
   end
 
   defp poll_until(check_fn, timeout_ms) do
