@@ -11,7 +11,8 @@ defmodule MrMaster.Master do
             num_reducers: 0,
             phase: :waiting,
             start_time: nil,
-            input_dir: nil
+            input_dir: nil,
+            recent_events: []
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -80,9 +81,11 @@ defmodule MrMaster.Master do
           if is_nil(opts.task_module), do: "unknown", else: Atom.to_string(opts.task_module)
       end
 
-    Logger.info(
-      "[master] job_started | task=#{task_name} files=#{map_size(map_tasks_hashmap)} reducers=#{opts.num_reducers} workers=#{map_size(state.workers)}"
-    )
+    updated_state =
+      log_event(
+        updated_state,
+        "[master] job_started | task=#{task_name} files=#{map_size(map_tasks_hashmap)} reducers=#{opts.num_reducers} workers=#{map_size(state.workers)}"
+      )
 
     # Assign pending tasks since we now have a new MapReduce job
     final_state = assign_pending_tasks(updated_state)
@@ -182,9 +185,11 @@ defmodule MrMaster.Master do
         state = %{state | phase: :done}
         duration = System.monotonic_time(:millisecond) - state.start_time
 
-        Logger.info(
-          "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
-        )
+        state =
+          log_event(
+            state,
+            "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
+          )
 
         {:noreply, state}
       else
@@ -249,7 +254,7 @@ defmodule MrMaster.Master do
     # Reassign tasks
     state = assign_pending_tasks(state)
     tasks_updated = num_updated_map_tasks + num_updated_reduce_tasks
-    Logger.info("[master] node_down | node=#{node} requeued=#{tasks_updated}")
+    state = log_event(state, "[master] node_down | node=#{node} requeued=#{tasks_updated}")
 
     {:noreply, state}
   end
@@ -308,9 +313,11 @@ defmodule MrMaster.Master do
       state = put_in(state.backup_tasks[{type, task_id}], node)
       state = put_in(state.workers[node], %MrProtocol.WorkerInfo{worker_info | status: :busy})
 
-      Logger.info(
-        "[master] backup_launched | task=map:#{task_id} primary=#{task.assigned_to} backup=#{node}"
-      )
+      state =
+        log_event(
+          state,
+          "[master] backup_launched | task=map:#{task_id} primary=#{task.assigned_to} backup=#{node}"
+        )
 
       assign_backup_tasks(state, type)
     else
@@ -329,9 +336,11 @@ defmodule MrMaster.Master do
       state = put_in(state.backup_tasks[{type, task_id}], node)
       state = put_in(state.workers[node], %MrProtocol.WorkerInfo{worker_info | status: :busy})
 
-      Logger.info(
-        "[master] backup_launched | task=reduce:#{task_id} primary=#{task.assigned_to} backup=#{node}"
-      )
+      state =
+        log_event(
+          state,
+          "[master] backup_launched | task=reduce:#{task_id} primary=#{task.assigned_to} backup=#{node}"
+        )
 
       assign_backup_tasks(state, type)
     else
@@ -366,15 +375,16 @@ defmodule MrMaster.Master do
         | status: :busy
       }
 
-      # Log task assignment
-      Logger.info(
-        "[master] task_assigned | type=map id=#{task_assigned.id} worker=#{idle_worker_node} dist=N/A"
-      )
-
       # Update state
       updated_state = put_in(state.map_tasks[task_assigned.id], task_assigned)
-
       updated_state = put_in(updated_state.workers[idle_worker_node], worker_assigned)
+
+      # Log task assignment
+      updated_state =
+        log_event(
+          updated_state,
+          "[master] task_assigned | type=map id=#{task_assigned.id} worker=#{idle_worker_node} dist=N/A"
+        )
 
       # Send the task to the worker
       GenServer.cast({MrWorker.Worker, idle_worker_node}, {:run_map, task_assigned, state.task_module, state.workers})
@@ -420,15 +430,16 @@ defmodule MrMaster.Master do
 
       mean_distance = Enum.sum(distances) / length(distances)
 
-      # Log task assignment
-      Logger.info(
-        "[master] task_assigned | type=reduce id=#{task_assigned.id} worker=#{idle_worker_node} dist=#{Float.round(mean_distance, 1)}"
-      )
-
       # Update state
       updated_state = put_in(state.reduce_tasks[task_assigned.id], task_assigned)
-
       updated_state = put_in(updated_state.workers[idle_worker_node], worker_assigned)
+
+      # Log task assignment
+      updated_state =
+        log_event(
+          updated_state,
+          "[master] task_assigned | type=reduce id=#{task_assigned.id} worker=#{idle_worker_node} dist=#{Float.round(mean_distance, 1)}"
+        )
 
       # Send the task to the worker
       GenServer.cast({MrWorker.Worker, idle_worker_node}, {:run_reduce, task_assigned, state.task_module, state.workers})
@@ -443,6 +454,14 @@ defmodule MrMaster.Master do
   defp assign_pending_tasks(state) do
     # catch-all for :waiting or :done — just return unchanged
     state
+  end
+
+  # Logs a message via Logger and appends it to the in-memory recent_events
+  # buffer (capped at 50 entries) so the LiveView dashboard can display it.
+  defp log_event(state, message) do
+    Logger.info(message)
+    recent = [message | state.recent_events] |> Enum.take(50)
+    %{state | recent_events: recent}
   end
 
   defp maybe_start_reduce(state) do

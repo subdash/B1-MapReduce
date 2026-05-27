@@ -1,0 +1,140 @@
+<div class="min-h-screen bg-gray-900 text-white p-8">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-8">
+    <h1 class="text-3xl font-bold">MapReduce Dashboard</h1>
+
+    <div class="flex items-center gap-4">
+      <!-- Master connection status -->
+      <%= if @master_connected do %>
+        <span class="flex items-center gap-2 text-green-400 text-sm">
+          <span class="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+          Master connected
+        </span>
+      <% else %>
+        <span class="flex items-center gap-2 text-yellow-400 text-sm">
+          <span class="inline-block w-2 h-2 rounded-full bg-yellow-400"></span>
+          Waiting for master...
+        </span>
+      <% end %>
+
+      <!-- Phase badge -->
+      <span class="px-3 py-1 rounded-full text-sm font-mono bg-gray-700">
+        Phase: <%= @phase %>
+      </span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
+
+    <!-- ── Worker Grid ─────────────────────────────────────────────── -->
+    <div>
+      <h2 class="text-xl font-semibold mb-4">Worker Nodes</h2>
+
+      <!-- Grid container — coords are 0.0–1.0, mapped to percentage position -->
+      <div class="relative w-full aspect-square border border-gray-600 bg-gray-800 rounded max-w-md">
+
+        <%= if map_size(@workers) == 0 do %>
+          <div class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+            No workers registered
+          </div>
+        <% end %>
+
+        <%= for {node, worker} <- @workers do %>
+          <% {left_pct, top_pct} = coords_pct(worker.coords) %>
+          <div
+            class="absolute w-3 h-3 rounded-full cursor-pointer transition-colors"
+            style={"left: #{left_pct}%; top: #{top_pct}%; transform: translate(-50%, -50%); background-color: #{status_color(worker.status)}"}
+            title={"#{node} — #{worker.status}"}
+          >
+          </div>
+        <% end %>
+      </div>
+
+      <!-- Legend -->
+      <div class="flex gap-4 mt-3 text-sm text-gray-400">
+        <span class="flex items-center gap-1">
+          <span class="inline-block w-3 h-3 rounded-full bg-green-500"></span> Idle
+        </span>
+        <span class="flex items-center gap-1">
+          <span class="inline-block w-3 h-3 rounded-full bg-blue-500"></span> Busy
+        </span>
+        <span class="flex items-center gap-1">
+          <span class="inline-block w-3 h-3 rounded-full bg-red-500"></span> Dead
+        </span>
+      </div>
+
+      <!-- Worker count summary -->
+      <div class="mt-2 text-sm text-gray-500">
+        <%= map_size(@workers) %> worker(s) registered
+      </div>
+    </div>
+
+    <!-- ── Progress & Events ───────────────────────────────────────── -->
+    <div class="flex flex-col gap-6">
+
+      <!-- Progress bars -->
+      <div>
+        <h2 class="text-xl font-semibold mb-4">Job Progress</h2>
+        <% map_prog = task_progress(@map_tasks) %>
+        <% reduce_prog = task_progress(@reduce_tasks) %>
+
+        <div class="space-y-4">
+          <!-- Map phase -->
+          <div>
+            <div class="flex justify-between text-sm mb-1">
+              <span class="text-gray-300">Map phase</span>
+              <span class="font-mono text-gray-400">
+                <%= map_prog.completed %> / <%= map_prog.total %> (<%= map_prog.percent %>%)
+              </span>
+            </div>
+            <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
+              <div
+                class="h-3 bg-green-500 rounded transition-all duration-300"
+                style={"width: #{map_prog.percent}%"}
+              ></div>
+            </div>
+            <%= if map_prog.in_progress > 0 do %>
+              <p class="text-xs text-gray-500 mt-1"><%= map_prog.in_progress %> task(s) in progress</p>
+            <% end %>
+          </div>
+
+          <!-- Reduce phase -->
+          <div>
+            <div class="flex justify-between text-sm mb-1">
+              <span class="text-gray-300">Reduce phase</span>
+              <span class="font-mono text-gray-400">
+                <%= reduce_prog.completed %> / <%= reduce_prog.total %> (<%= reduce_prog.percent %>%)
+              </span>
+            </div>
+            <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
+              <div
+                class="h-3 bg-blue-500 rounded transition-all duration-300"
+                style={"width: #{reduce_prog.percent}%"}
+              ></div>
+            </div>
+            <%= if reduce_prog.in_progress > 0 do %>
+              <p class="text-xs text-gray-500 mt-1"><%= reduce_prog.in_progress %> task(s) in progress</p>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <!-- Event log -->
+      <div class="flex-1">
+        <h2 class="text-xl font-semibold mb-4">Recent Events</h2>
+        <div class="bg-gray-800 border border-gray-700 rounded p-4 h-48 overflow-y-auto font-mono text-xs">
+          <%= if Enum.empty?(@recent_events) do %>
+            <p class="text-gray-500">No events yet...</p>
+          <% else %>
+            <%= for event <- @recent_events do %>
+              <div class="text-gray-300 mb-1 leading-relaxed"><%= event %></div>
+            <% end %>
+          <% end %>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
