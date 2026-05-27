@@ -65,6 +65,15 @@ defmodule Mix.Tasks.Mr.Start do
         raise "Failed to start Master GenServer: #{inspect(reason)}"
     end
 
+    # Start the LiveView dashboard alongside the master in the same BEAM VM
+    case Application.ensure_all_started(:mr_dashboard) do
+      {:ok, _apps} ->
+        Logger.info("[master] Dashboard started — http://localhost:4000")
+
+      {:error, reason} ->
+        Logger.warning("[master] Dashboard failed to start: #{inspect(reason)} — continuing without it")
+    end
+
     # Start worker processes
     Enum.each(1..workers, fn worker_num ->
       worker_name = "worker#{worker_num}@127.0.0.1"
@@ -108,6 +117,8 @@ defmodule Mix.Tasks.Mr.Start do
     Logger.info("=== MapReduce Job Complete ===")
     Logger.info("Duration: #{Float.round(duration_sec, 1)} seconds")
     Logger.info("Results written to output/: #{output_files}")
+    Logger.info("Dashboard still available at http://localhost:4000 — Ctrl+C to exit")
+    Process.sleep(:infinity)
   end
 
   defp poll_until(check_fn, timeout_ms) do
