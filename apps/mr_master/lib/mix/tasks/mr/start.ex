@@ -97,29 +97,34 @@ defmodule Mix.Tasks.Mr.Start do
       raise "Only #{worker_count}/#{workers} workers connected"
     end
 
-    GenServer.call(
-      MrMaster.Master,
-      {:submit_job, %{input_dir: input, task_module: task_module, num_reducers: reducers}}
-    )
+    # Wrap job execution in try/after so shutdown_workers always runs — even
+    # if the job crashes. Without this, a mid-run exception leaves workers alive
+    # and their node names stuck in epmd, causing "name in use" on the next run.
+    try do
+      GenServer.call(
+        MrMaster.Master,
+        {:submit_job, %{input_dir: input, task_module: task_module, num_reducers: reducers}}
+      )
 
-    # Wait for job completion
-    wait_for_completion()
-    # Report summary
-    end_time = System.monotonic_time(:millisecond)
-    duration_ms = end_time - start_time
-    duration_sec = duration_ms / 1000
+      # Wait for job completion
+      wait_for_completion()
+      # Report summary
+      end_time = System.monotonic_time(:millisecond)
+      duration_ms = end_time - start_time
+      duration_sec = duration_ms / 1000
 
-    output_files =
-      case File.ls("output/") do
-        {:ok, files} -> Enum.join(files, ", ")
-        _ -> "(no output directory found)"
-      end
+      output_files =
+        case File.ls("output/") do
+          {:ok, files} -> Enum.join(files, ", ")
+          _ -> "(no output directory found)"
+        end
 
-    Logger.info("=== MapReduce Job Complete ===")
-    Logger.info("Duration: #{Float.round(duration_sec, 1)} seconds")
-    Logger.info("Results written to output/: #{output_files}")
-
-    shutdown_workers(ports)
+      Logger.info("=== MapReduce Job Complete ===")
+      Logger.info("Duration: #{Float.round(duration_sec, 1)} seconds")
+      Logger.info("Results written to output/: #{output_files}")
+    after
+      shutdown_workers(ports)
+    end
 
     Logger.info("Dashboard still available at http://localhost:4000 — Ctrl+C to exit")
     Process.sleep(:infinity)
