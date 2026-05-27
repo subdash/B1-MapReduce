@@ -7,13 +7,18 @@ defmodule MrWorker.Application do
 
   @impl true
   def start(_type, _args) do
-    master_node = Application.fetch_env!(:mr_worker, :master_node)
-    coords = Application.fetch_env!(:mr_worker, :coords)
+    children =
+      if Application.get_env(:mr_master, :start_master, false) == false do
+        master_node = Application.fetch_env!(:mr_worker, :master_node)
+        coords = Application.fetch_env!(:mr_worker, :coords)
 
-    children = [
-      MrWorker.FileServer,
-      {MrWorker.Worker, [master_node: master_node, coords: coords]}
-    ]
+        [
+          MrWorker.FileServer,
+          {MrWorker.Worker, [master_node: master_node, coords: coords]}
+        ]
+      else
+        []
+      end
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options

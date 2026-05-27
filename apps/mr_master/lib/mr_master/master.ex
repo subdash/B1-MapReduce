@@ -30,6 +30,22 @@ defmodule MrMaster.Master do
   end
 
   @impl true
+  def handle_call(:get_workers, _from, state) do
+    {:reply, state.workers, state}
+  end
+
+  @impl true
+  def handle_call(:get_phase, _from, state) do
+    {:reply, state.phase, state}
+  end
+
+  @impl true
+  def handle_call(:ready, _from, state) do
+    ready = state.phase in [:waiting, :mapping, :reducing, :done]
+    {:reply, if(ready, do: :ok, else: :retry), state}
+  end
+
+  @impl true
   def handle_call({:register, worker_info}, _from, state) do
     worker_node = worker_info.node
     # Add the new worker node to the registry
@@ -360,6 +376,9 @@ defmodule MrMaster.Master do
 
       updated_state = put_in(updated_state.workers[idle_worker_node], worker_assigned)
 
+      # Send the task to the worker
+      GenServer.cast({MrWorker.Worker, idle_worker_node}, {:run_map, task_assigned, state.task_module, state.workers})
+
       # Recursively call the function until there are no more idle tasks or workers
       assign_pending_tasks(updated_state)
     else
@@ -410,6 +429,9 @@ defmodule MrMaster.Master do
       updated_state = put_in(state.reduce_tasks[task_assigned.id], task_assigned)
 
       updated_state = put_in(updated_state.workers[idle_worker_node], worker_assigned)
+
+      # Send the task to the worker
+      GenServer.cast({MrWorker.Worker, idle_worker_node}, {:run_reduce, task_assigned, state.task_module, state.workers})
 
       # Recursively call the function until there are no more idle tasks or workers
       assign_pending_tasks(updated_state)

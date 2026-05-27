@@ -1,12 +1,17 @@
 defmodule MrWorker.MapTask do
+  require Logger
+
   def execute(task, task_module, worker_node_name) do
+    Logger.info("[map_task] starting | id=#{task.id} file=#{task.file_path}")
+
     # Read file line by line to build up a list of pairs
     pairs =
       File.stream!(task.file_path)
       |> Enum.reduce([], fn line, acc ->
         word_count_pairs = task_module.map(task.file_path, line)
-        acc ++ word_count_pairs
+        word_count_pairs ++ acc
       end)
+      |> Enum.reverse()
 
     # Use hash function to get a bucket name and group results by bucket name 
     grouped_pairs =
@@ -37,6 +42,7 @@ defmodule MrWorker.MapTask do
       end)
       |> Map.new()
 
+    Logger.info("[map_task] done | id=#{task.id} buckets=#{map_size(bucket_locations)}")
     {:ok, bucket_locations}
   end
 end

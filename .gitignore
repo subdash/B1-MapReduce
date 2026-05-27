@@ -1,8 +1,9 @@
 tmp/
-output/
+output*/
 .superpowers/
 _build/
 deps/
 *.beam
 .claude/
 sample-data/
+
