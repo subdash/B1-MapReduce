@@ -7,10 +7,12 @@ defmodule MrWorker.Application do
 
   @impl true
   def start(_type, _args) do
+    master_node = Application.fetch_env!(:mr_worker, :master_node)
+    coords = Application.fetch_env!(:mr_worker, :coords)
+
     children = [
-      MrWorker.FileServer
-      # Starts a worker by calling: MrWorker.Worker.start_link(arg)
-      # {MrWorker.Worker, arg}
+      MrWorker.FileServer,
+      {MrWorker.Worker, [master_node: master_node, coords: coords]}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
