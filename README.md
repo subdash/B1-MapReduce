@@ -6,3 +6,5 @@ Claude Code was used in the development of this project for the following tasks:
 - Designing the implementation and breaking down the work into tasks
 - Reviewing code
 - Writing small segments of code such as log statements, test assertions and providing code examples typically in the form of "this is how you do _x_ in Elixir"
+- Task 16 (orchestration): I heavily utilized the Claude Haiku model to assist in debugging the orchestration of the application
+
