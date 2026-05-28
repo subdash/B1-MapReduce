@@ -1,6 +1,66 @@
 # Baby's First MapReduce
 This is an implementation of the MapReduce programming model as defined in the 2004 paper [_MapReduce: Simplified Data Processing on Large Clusters_](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf). 
 
+The framework runs MapReduce jobs on a cluster of Erlang nodes. Currently it executes on a single machine, but the distributed architecture is designed to extend to multiple physical machines. The initial task is a word-frequency count across 20 large text files. A Phoenix LiveView dashboard provides real-time visualization of task progress across workers.
+
+## Prerequisites
+
+- **Elixir 1.14+** and **Erlang/OTP 24+**
+- **Python 3.x** (for generating sample data)
+- ~2 GB of disk space (for sample data and intermediate files)
+
+## Quick Start
+
+### 1. Generate Sample Data
+
+Generate 20 sample text files (~1 GB total) using the included Python script:
+
+```bash
+python3 generate_data.py
+```
+
+This creates `sample-data/document_01.txt` through `document_20.txt`, each containing 700k–1.2M lines of randomly selected words. The script takes a few minutes to complete.
+
+### 2. Start the Application
+
+Install dependencies and start the Phoenix LiveView dashboard:
+
+```bash
+mix deps.get
+mix ecto.create
+mix phx.server
+```
+
+This starts:
+- **Phoenix LiveView dashboard** — available at `http://localhost:4000` with real-time visualization of job progress
+
+### 3. Run the Word Count Job
+
+In a separate terminal, start the master node and worker cluster, then execute the job:
+
+```bash
+mix mr.start
+```
+
+This:
+1. Starts the master node and 4 worker nodes (configurable with `--workers`)
+2. Assigns map tasks to workers (one per file)
+3. Emits intermediate `{word, 1}` pairs bucketed by word hash
+4. Assigns reduce tasks to aggregate counts per word
+5. Writes final results to `output/`
+
+You can customize the run with options:
+
+```bash
+mix mr.start --workers 8 --reducers 4 --input sample-data/
+```
+
+Watch real-time progress on the dashboard at `http://localhost:4000`:
+
+![LiveView Dashboard Demo](docs/live_view_demo_gif.gif)
+
+The dashboard shows all active workers, their current task assignments, and real-time job progress.
+
 ## AI disclaimer
 Claude Code was used in the development of this project for the following tasks:
 - Designing the implementation and breaking down the work into tasks
