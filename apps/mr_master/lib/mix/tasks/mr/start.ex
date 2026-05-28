@@ -26,7 +26,7 @@ defmodule Mix.Tasks.Mr.Start do
     task_module =
       case task_string do
         "word_count" -> MrWorker.Tasks.WordCount
-        # "grep" -> MrWorker.Tasks.Grep
+        "distributed_grep" -> MrWorker.Tasks.DistributedGrep
         # "inverted_index" -> MrWorker.Tasks.InvertedIndex
         _ -> raise "Unknown task: #{task_string}"
       end
@@ -69,14 +69,21 @@ defmodule Mix.Tasks.Mr.Start do
     # `server: true` must be set explicitly — Phoenix only binds a port automatically
     # when started via `mix phx.server`. Without it the app starts but listens nowhere.
     endpoint_config = Application.get_env(:mr_dashboard, MrDashboardWeb.Endpoint, [])
-    Application.put_env(:mr_dashboard, MrDashboardWeb.Endpoint, Keyword.put(endpoint_config, :server, true))
+
+    Application.put_env(
+      :mr_dashboard,
+      MrDashboardWeb.Endpoint,
+      Keyword.put(endpoint_config, :server, true)
+    )
 
     case Application.ensure_all_started(:mr_dashboard) do
       {:ok, _apps} ->
         Logger.info("[master] Dashboard started — http://localhost:4000")
 
       {:error, reason} ->
-        Logger.warning("[master] Dashboard failed to start: #{inspect(reason)} — continuing without it")
+        Logger.warning(
+          "[master] Dashboard failed to start: #{inspect(reason)} — continuing without it"
+        )
     end
 
     # Start worker processes — keep port handles so we can kill workers on shutdown
