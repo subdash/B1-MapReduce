@@ -7,7 +7,7 @@ defmodule MrDashboardWeb.DashboardLive do
   def mount(_params, _session, socket) do
     # Initialise UI-only state before the first data fetch so assign_master_state
     # never has to worry about these keys not existing.
-    socket = assign(socket, selected_worker: nil, confirm_kill: nil)
+    socket = assign(socket, selected_worker: nil, confirm_kill: nil, final_elapsed_time: nil)
 
     if connected?(socket) do
       Process.send_after(self(), :update_state, @poll_interval_ms)
@@ -57,6 +57,13 @@ defmodule MrDashboardWeb.DashboardLive do
     {:noreply, assign(socket, selected_worker: nil, confirm_kill: nil)}
   end
 
+  @impl true
+  def handle_event("throttle_worker", %{"node" => node_str}, socket) do
+    node = String.to_atom(node_str)
+    GenServer.cast(MrMaster.Master, {:set_throttle, node, 0.5})
+    {:noreply, socket}
+  end
+
   # --- Data fetching ---
 
   defp fetch_master_state do
@@ -100,11 +107,25 @@ defmodule MrDashboardWeb.DashboardLive do
       reduce_tasks: %{},
       phase: :waiting,
       recent_events: [],
-      worker_memory: %{}
+      worker_memory: %{},
+      elapsed_time: nil,
+      job_complete: false,
+      final_elapsed_time: nil
     )
   end
 
   defp assign_master_state(socket, state) do
+    job_complete = state.phase == :done
+
+    # Capture elapsed time when job completes, then freeze it
+    final_elapsed = if job_complete and socket.assigns[:final_elapsed_time] == nil do
+      format_elapsed_ms(state.start_time)
+    else
+      socket.assigns[:final_elapsed_time]
+    end
+
+    elapsed_time = final_elapsed || format_elapsed_ms(state.start_time)
+
     assign(socket,
       master_connected: true,
       workers: state.workers,
@@ -112,7 +133,10 @@ defmodule MrDashboardWeb.DashboardLive do
       reduce_tasks: state.reduce_tasks,
       phase: state.phase,
       recent_events: Map.get(state, :recent_events, []),
-      worker_memory: fetch_worker_memory(state.workers)
+      worker_memory: fetch_worker_memory(state.workers),
+      elapsed_time: elapsed_time,
+      job_complete: job_complete,
+      final_elapsed_time: final_elapsed
     )
   end
 
@@ -169,5 +193,14 @@ defmodule MrDashboardWeb.DashboardLive do
       end)
 
     map_hit || reduce_hit
+  end
+
+  defp format_elapsed_ms(nil), do: nil
+
+  defp format_elapsed_ms(start_time) do
+    elapsed_ms = System.monotonic_time(:millisecond) - start_time
+    seconds = div(elapsed_ms, 1000)
+    millis = rem(elapsed_ms, 1000)
+    {seconds, millis}
   end
 end
