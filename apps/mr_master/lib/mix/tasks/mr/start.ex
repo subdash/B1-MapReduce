@@ -65,18 +65,33 @@ defmodule Mix.Tasks.Mr.Start do
         raise "Failed to start Master GenServer: #{inspect(reason)}"
     end
 
-    # Start worker processes
-    Enum.each(1..workers, fn worker_num ->
-      worker_name = "worker#{worker_num}@127.0.0.1"
-      x = Enum.random(0..99) * 1.0
-      y = Enum.random(0..99) * 1.0
-      env_vars = "MR_START_MASTER=false MR_COORDS=#{x},#{y}"
+    # Start the LiveView dashboard alongside the master in the same BEAM VM.
+    # `server: true` must be set explicitly — Phoenix only binds a port automatically
+    # when started via `mix phx.server`. Without it the app starts but listens nowhere.
+    endpoint_config = Application.get_env(:mr_dashboard, MrDashboardWeb.Endpoint, [])
+    Application.put_env(:mr_dashboard, MrDashboardWeb.Endpoint, Keyword.put(endpoint_config, :server, true))
 
-      command =
-        "sh -c '#{env_vars} elixir --name #{worker_name} --cookie secret -S mix run --no-halt'"
+    case Application.ensure_all_started(:mr_dashboard) do
+      {:ok, _apps} ->
+        Logger.info("[master] Dashboard started — http://localhost:4000")
 
-      Port.open({:spawn, command}, [])
-    end)
+      {:error, reason} ->
+        Logger.warning("[master] Dashboard failed to start: #{inspect(reason)} — continuing without it")
+    end
+
+    # Start worker processes — keep port handles so we can kill workers on shutdown
+    ports =
+      Enum.map(1..workers, fn worker_num ->
+        worker_name = "worker#{worker_num}@127.0.0.1"
+        x = Enum.random(0..99) * 1.0
+        y = Enum.random(0..99) * 1.0
+        env_vars = "MR_START_MASTER=false MR_COORDS=#{x},#{y}"
+
+        command =
+          "sh -c '#{env_vars} elixir --name #{worker_name} --cookie secret -S mix run --no-halt'"
+
+        Port.open({:spawn, command}, [])
+      end)
 
     wait_for_workers(workers)
 
@@ -87,27 +102,60 @@ defmodule Mix.Tasks.Mr.Start do
       raise "Only #{worker_count}/#{workers} workers connected"
     end
 
-    GenServer.call(
-      MrMaster.Master,
-      {:submit_job, %{input_dir: input, task_module: task_module, num_reducers: reducers}}
-    )
+    # Wrap job execution in try/after so shutdown_workers always runs — even
+    # if the job crashes. Without this, a mid-run exception leaves workers alive
+    # and their node names stuck in epmd, causing "name in use" on the next run.
+    try do
+      GenServer.call(
+        MrMaster.Master,
+        {:submit_job, %{input_dir: input, task_module: task_module, num_reducers: reducers}}
+      )
 
-    # Wait for job completion
-    wait_for_completion()
-    # Report summary
-    end_time = System.monotonic_time(:millisecond)
-    duration_ms = end_time - start_time
-    duration_sec = duration_ms / 1000
+      # Wait for job completion
+      wait_for_completion()
+      # Report summary
+      end_time = System.monotonic_time(:millisecond)
+      duration_ms = end_time - start_time
+      duration_sec = duration_ms / 1000
 
-    output_files =
-      case File.ls("output/") do
-        {:ok, files} -> Enum.join(files, ", ")
-        _ -> "(no output directory found)"
-      end
+      output_files =
+        case File.ls("output/") do
+          {:ok, files} -> Enum.join(files, ", ")
+          _ -> "(no output directory found)"
+        end
 
-    Logger.info("=== MapReduce Job Complete ===")
-    Logger.info("Duration: #{Float.round(duration_sec, 1)} seconds")
-    Logger.info("Results written to output/: #{output_files}")
+      Logger.info("=== MapReduce Job Complete ===")
+      Logger.info("Duration: #{Float.round(duration_sec, 1)} seconds")
+      Logger.info("Results written to output/: #{output_files}")
+    after
+      shutdown_workers(ports)
+    end
+
+    Logger.info("Dashboard still available at http://localhost:4000 — Ctrl+C to exit")
+    Process.sleep(:infinity)
+  end
+
+  # Gracefully shut down all worker nodes so their names are freed in epmd before
+  # the master exits. Uses OTP's :init.stop/0 via RPC as the primary mechanism
+  # (clean deregistration), then closes the OS-level ports as a fallback for any
+  # workers that crashed and are no longer reachable via Erlang distribution.
+  defp shutdown_workers(ports) do
+    connected = Node.list()
+    Logger.info("[master] Shutting down #{length(connected)} worker node(s)...")
+
+    Enum.each(connected, fn node ->
+      :rpc.cast(node, :init, :stop, [])
+    end)
+
+    # Give workers time to deregister from epmd before we exit
+    Process.sleep(2_000)
+
+    # Fallback: close OS-level ports for any workers that didn't respond
+    Enum.each(ports, fn port ->
+      if Port.info(port) != nil, do: Port.close(port)
+    end)
+
+    Logger.info("[master] Workers shut down.")
   end
 
   defp poll_until(check_fn, timeout_ms) do
