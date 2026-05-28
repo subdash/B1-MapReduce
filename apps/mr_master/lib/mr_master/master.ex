@@ -93,6 +93,15 @@ defmodule MrMaster.Master do
   end
 
   @impl true
+  def handle_call({:kill_worker, node}, _from, state) do
+    state = log_event(state, "[master] kill_worker | node=#{node}")
+    # Send a graceful OTP shutdown — worker deregisters from epmd itself.
+    # The subsequent {:nodedown, node} message handles task re-queuing.
+    :rpc.cast(node, :init, :stop, [])
+    {:reply, :ok, state}
+  end
+
+  @impl true
   def handle_cast({:map_done, task_id, bucket_locations}, state) do
     # If primary task is completed already, that means a bakcup map task
     # just sent its :map_done message. We must mark the backup task as completed.
@@ -214,49 +223,56 @@ defmodule MrMaster.Master do
     dead_worker = %MrProtocol.WorkerInfo{worker | status: :dead}
     state = put_in(state.workers[node], dead_worker)
 
-    # Update all map tasks assigned to the node which are in progress or completed,
-    # as well as any reduce tasks in progress assigned to the node. Set them as idle
-    # and remove the assignee so that they can be retried.
-    updated_map_tasks =
-      Map.new(state.map_tasks, fn {task_id, task} ->
-        %MrProtocol.MapTask{} = task
+    # If the job is already done, worker deaths are expected (graceful shutdown
+    # or dashboard kill). Don't reset task assignments — that would show incorrect
+    # 0% map progress on the dashboard after a completed job.
+    if state.phase == :done do
+      state = log_event(state, "[master] node_down | node=#{node} (job complete, no requeue)")
+      {:noreply, state}
+    else
+      # Update all map tasks assigned to the node which are in progress or completed,
+      # as well as any reduce tasks in progress assigned to the node. Set them as idle
+      # and remove the assignee so that they can be retried.
+      updated_map_tasks =
+        Map.new(state.map_tasks, fn {task_id, task} ->
+          %MrProtocol.MapTask{} = task
 
-        if task.assigned_to == node and task.status in [:in_progress, :completed] do
-          {task_id, %MrProtocol.MapTask{task | status: :idle, assigned_to: nil}}
-        else
-          {task_id, task}
-        end
-      end)
+          if task.assigned_to == node and task.status in [:in_progress, :completed] do
+            {task_id, %MrProtocol.MapTask{task | status: :idle, assigned_to: nil}}
+          else
+            {task_id, task}
+          end
+        end)
 
-    num_updated_map_tasks =
-      Enum.count(state.map_tasks, fn {_task_id, task} ->
-        task.assigned_to == node and task.status in [:in_progress, :completed]
-      end)
+      num_updated_map_tasks =
+        Enum.count(state.map_tasks, fn {_task_id, task} ->
+          task.assigned_to == node and task.status in [:in_progress, :completed]
+        end)
 
-    updated_reduce_tasks =
-      Map.new(state.reduce_tasks, fn {task_id, task} ->
-        %MrProtocol.ReduceTask{} = task
+      updated_reduce_tasks =
+        Map.new(state.reduce_tasks, fn {task_id, task} ->
+          %MrProtocol.ReduceTask{} = task
 
-        if task.assigned_to == node and task.status == :in_progress do
-          {task_id, %MrProtocol.ReduceTask{task | status: :idle, assigned_to: nil}}
-        else
-          {task_id, task}
-        end
-      end)
+          if task.assigned_to == node and task.status == :in_progress do
+            {task_id, %MrProtocol.ReduceTask{task | status: :idle, assigned_to: nil}}
+          else
+            {task_id, task}
+          end
+        end)
 
-    num_updated_reduce_tasks =
-      Enum.count(state.reduce_tasks, fn {_task_id, task} ->
-        task.assigned_to == node and task.status == :in_progress
-      end)
+      num_updated_reduce_tasks =
+        Enum.count(state.reduce_tasks, fn {_task_id, task} ->
+          task.assigned_to == node and task.status == :in_progress
+        end)
 
-    state = put_in(state.map_tasks, updated_map_tasks)
-    state = put_in(state.reduce_tasks, updated_reduce_tasks)
-    # Reassign tasks
-    state = assign_pending_tasks(state)
-    tasks_updated = num_updated_map_tasks + num_updated_reduce_tasks
-    state = log_event(state, "[master] node_down | node=#{node} requeued=#{tasks_updated}")
+      state = put_in(state.map_tasks, updated_map_tasks)
+      state = put_in(state.reduce_tasks, updated_reduce_tasks)
+      state = assign_pending_tasks(state)
+      tasks_updated = num_updated_map_tasks + num_updated_reduce_tasks
+      state = log_event(state, "[master] node_down | node=#{node} requeued=#{tasks_updated}")
 
-    {:noreply, state}
+      {:noreply, state}
+    end
   end
 
   @impl true

@@ -1,134 +1,197 @@
-<div class="min-h-screen bg-gray-900 text-white p-8">
+<%!-- Full-viewport dashboard — no page scroll; internal sections scroll independently --%>
+<div class="h-screen overflow-hidden bg-gray-900 text-white flex flex-col p-6 gap-4">
 
-  <!-- Header -->
-  <div class="flex items-center justify-between mb-8">
-    <h1 class="text-3xl font-bold">MapReduce Dashboard</h1>
+  <%!-- ── Header ──────────────────────────────────────────────────────────────── --%>
+  <div class="flex-none flex items-center justify-between">
+    <h1 class="text-2xl font-bold tracking-tight">MapReduce Dashboard</h1>
 
-    <div class="flex items-center gap-4">
-      <!-- Master connection status -->
+    <div class="flex items-center gap-3 text-sm">
       <%= if @master_connected do %>
-        <span class="flex items-center gap-2 text-green-400 text-sm">
-          <span class="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+        <span class="flex items-center gap-1.5 text-green-400">
+          <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
           Master connected
         </span>
       <% else %>
-        <span class="flex items-center gap-2 text-yellow-400 text-sm">
-          <span class="inline-block w-2 h-2 rounded-full bg-yellow-400"></span>
-          Waiting for master...
+        <span class="flex items-center gap-1.5 text-yellow-400">
+          <span class="w-2 h-2 rounded-full bg-yellow-400"></span>
+          Waiting for master…
         </span>
       <% end %>
 
-      <!-- Phase badge -->
-      <span class="px-3 py-1 rounded-full text-sm font-mono bg-gray-700">
-        Phase: <%= @phase %>
+      <span class="px-2.5 py-1 rounded-full font-mono bg-gray-700 text-gray-300">
+        <%= @phase %>
       </span>
     </div>
   </div>
 
-  <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
+  <%!-- ── Main content — fills remaining height ──────────────────────────────── --%>
+  <div class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-2 gap-6">
 
-    <!-- ── Worker Grid ─────────────────────────────────────────────── -->
-    <div>
-      <h2 class="text-xl font-semibold mb-4">Worker Nodes</h2>
+    <%!-- ── Left column: worker grid + optional sidebar ──────────────────────── --%>
+    <div class="flex flex-col gap-4 min-h-0">
 
-      <!-- Grid container — coords are 0.0–1.0, mapped to percentage position -->
-      <div class="relative w-full aspect-square border border-gray-600 bg-gray-800 rounded max-w-md">
+      <div class="flex gap-4 items-start">
+        <%!-- Worker grid --%>
+        <div class="flex-none flex flex-col gap-2">
+          <h2 class="text-sm font-semibold uppercase tracking-widest text-gray-400">
+            Worker Nodes
+            <span class="ml-1 text-gray-500 normal-case tracking-normal font-normal">
+              (<%= map_size(@workers) %> registered)
+            </span>
+          </h2>
 
-        <%= if map_size(@workers) == 0 do %>
-          <div class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
-            No workers registered
-          </div>
-        <% end %>
-
-        <%= for {node, worker} <- @workers do %>
-          <% {left_pct, top_pct} = coords_pct(worker.coords) %>
           <div
-            class="absolute w-3 h-3 rounded-full cursor-pointer transition-colors"
-            style={"left: #{left_pct}%; top: #{top_pct}%; transform: translate(-50%, -50%); background-color: #{status_color(worker.status)}"}
-            title={"#{node} — #{worker.status}"}
+            class="relative border border-gray-600 bg-gray-800 rounded"
+            style="width: 280px; height: 280px;"
           >
+            <%= if map_size(@workers) == 0 do %>
+              <div class="absolute inset-0 flex items-center justify-center text-gray-500 text-xs">
+                No workers yet
+              </div>
+            <% end %>
+
+            <%= for {node, worker} <- @workers do %>
+              <% {left_pct, top_pct} = coords_pct(worker.coords) %>
+              <% is_selected = @selected_worker == node %>
+              <div
+                class={"absolute w-3 h-3 rounded-full cursor-pointer transition-all hover:scale-150 " <>
+                  if(is_selected, do: "ring-2 ring-white ring-offset-1 ring-offset-gray-800 scale-125", else: "")}
+                style={"left: #{left_pct}%; top: #{top_pct}%;
+                        transform: translate(-50%, -50%) #{if is_selected, do: "scale(1.25)", else: ""};
+                        background-color: #{status_color(worker.status)}"}
+                phx-click="select_worker"
+                phx-value-node={Atom.to_string(node)}
+                title={"#{node}  (#{status_label(worker.status)})"}
+              ></div>
+            <% end %>
+          </div>
+
+          <%!-- Legend --%>
+          <div class="flex gap-3 text-xs text-gray-400">
+            <span class="flex items-center gap-1">
+              <span class="w-2.5 h-2.5 rounded-full bg-green-500"></span> Idle
+            </span>
+            <span class="flex items-center gap-1">
+              <span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span> Busy
+            </span>
+            <span class="flex items-center gap-1">
+              <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span> Dead
+            </span>
+          </div>
+        </div>
+
+        <%!-- Worker detail sidebar — appears when a worker is selected --%>
+        <%= if @selected_worker && Map.has_key?(@workers, @selected_worker) do %>
+          <% worker = @workers[@selected_worker] %>
+          <% {cx, cy} = coords_pct(worker.coords) %>
+          <div class="flex-1 bg-gray-800 border border-gray-700 rounded p-4 text-sm flex flex-col gap-3">
+            <div class="flex items-center justify-between">
+              <span class="font-mono text-xs text-gray-300 break-all"><%= @selected_worker %></span>
+              <span
+                class="px-2 py-0.5 rounded-full text-xs font-medium"
+                style={"background-color: #{status_color(worker.status)}22; color: #{status_color(worker.status)}"}
+              >
+                <%= status_label(worker.status) %>
+              </span>
+            </div>
+
+            <div class="space-y-1 text-xs text-gray-400">
+              <div class="flex justify-between">
+                <span>Coordinates</span>
+                <span class="font-mono text-gray-300">(<%= cx %>, <span><%= cy %></span>)</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Memory</span>
+                <span class="font-mono text-gray-300">
+                  <%= format_memory(Map.get(@worker_memory, @selected_worker)) %>
+                </span>
+              </div>
+              <div class="flex justify-between">
+                <span>Throttle</span>
+                <span class="font-mono text-gray-300"><%= worker.throttle_multiplier %>×</span>
+              </div>
+              <%= if task = current_task(@selected_worker, @map_tasks, @reduce_tasks) do %>
+                <div class="flex justify-between">
+                  <span>Current task</span>
+                  <span class="font-mono text-gray-300"><%= task %></span>
+                </div>
+              <% end %>
+            </div>
+
+            <%= if worker.status != :dead do %>
+              <div class="pt-1 mt-auto">
+                <button
+                  phx-click="request_kill"
+                  phx-value-node={Atom.to_string(@selected_worker)}
+                  class="w-full bg-red-800 hover:bg-red-700 text-red-200 text-xs py-1.5 rounded transition-colors"
+                >
+                  Kill worker
+                </button>
+              </div>
+            <% end %>
           </div>
         <% end %>
-      </div>
-
-      <!-- Legend -->
-      <div class="flex gap-4 mt-3 text-sm text-gray-400">
-        <span class="flex items-center gap-1">
-          <span class="inline-block w-3 h-3 rounded-full bg-green-500"></span> Idle
-        </span>
-        <span class="flex items-center gap-1">
-          <span class="inline-block w-3 h-3 rounded-full bg-blue-500"></span> Busy
-        </span>
-        <span class="flex items-center gap-1">
-          <span class="inline-block w-3 h-3 rounded-full bg-red-500"></span> Dead
-        </span>
-      </div>
-
-      <!-- Worker count summary -->
-      <div class="mt-2 text-sm text-gray-500">
-        <%= map_size(@workers) %> worker(s) registered
       </div>
     </div>
 
-    <!-- ── Progress & Events ───────────────────────────────────────── -->
-    <div class="flex flex-col gap-6">
+    <%!-- ── Right column: progress + event log ─────────────────────────────────── --%>
+    <div class="flex flex-col gap-4 min-h-0">
 
-      <!-- Progress bars -->
-      <div>
-        <h2 class="text-xl font-semibold mb-4">Job Progress</h2>
+      <%!-- Progress bars --%>
+      <div class="flex-none space-y-3">
+        <h2 class="text-sm font-semibold uppercase tracking-widest text-gray-400">Job Progress</h2>
         <% map_prog = task_progress(@map_tasks) %>
         <% reduce_prog = task_progress(@reduce_tasks) %>
 
-        <div class="space-y-4">
-          <!-- Map phase -->
-          <div>
-            <div class="flex justify-between text-sm mb-1">
-              <span class="text-gray-300">Map phase</span>
-              <span class="font-mono text-gray-400">
-                <%= map_prog.completed %> / <%= map_prog.total %> (<%= map_prog.percent %>%)
-              </span>
-            </div>
-            <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
-              <div
-                class="h-3 bg-green-500 rounded transition-all duration-300"
-                style={"width: #{map_prog.percent}%"}
-              ></div>
-            </div>
-            <%= if map_prog.in_progress > 0 do %>
-              <p class="text-xs text-gray-500 mt-1"><%= map_prog.in_progress %> task(s) in progress</p>
-            <% end %>
+        <div>
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-gray-300">Map phase</span>
+            <span class="font-mono text-gray-400">
+              <%= map_prog.completed %>/<%= map_prog.total %> &nbsp; <%= map_prog.percent %>%
+              <%= if map_prog.in_progress > 0 do %>
+                <span class="text-blue-400">(<%= map_prog.in_progress %> running)</span>
+              <% end %>
+            </span>
           </div>
+          <div class="w-full h-2 bg-gray-700 rounded overflow-hidden">
+            <div class="h-2 bg-green-500 rounded transition-all duration-300"
+                 style={"width: #{map_prog.percent}%"}></div>
+          </div>
+        </div>
 
-          <!-- Reduce phase -->
-          <div>
-            <div class="flex justify-between text-sm mb-1">
-              <span class="text-gray-300">Reduce phase</span>
-              <span class="font-mono text-gray-400">
-                <%= reduce_prog.completed %> / <%= reduce_prog.total %> (<%= reduce_prog.percent %>%)
-              </span>
-            </div>
-            <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
-              <div
-                class="h-3 bg-blue-500 rounded transition-all duration-300"
-                style={"width: #{reduce_prog.percent}%"}
-              ></div>
-            </div>
-            <%= if reduce_prog.in_progress > 0 do %>
-              <p class="text-xs text-gray-500 mt-1"><%= reduce_prog.in_progress %> task(s) in progress</p>
-            <% end %>
+        <div>
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-gray-300">Reduce phase</span>
+            <span class="font-mono text-gray-400">
+              <%= reduce_prog.completed %>/<%= reduce_prog.total %> &nbsp; <%= reduce_prog.percent %>%
+              <%= if reduce_prog.in_progress > 0 do %>
+                <span class="text-blue-400">(<%= reduce_prog.in_progress %> running)</span>
+              <% end %>
+            </span>
+          </div>
+          <div class="w-full h-2 bg-gray-700 rounded overflow-hidden">
+            <div class="h-2 bg-blue-500 rounded transition-all duration-300"
+                 style={"width: #{reduce_prog.percent}%"}></div>
           </div>
         </div>
       </div>
 
-      <!-- Event log -->
-      <div class="flex-1">
-        <h2 class="text-xl font-semibold mb-4">Recent Events</h2>
-        <div class="bg-gray-800 border border-gray-700 rounded p-4 h-48 overflow-y-auto font-mono text-xs">
+      <%!-- Event log — fills remaining height, auto-scrolls to bottom --%>
+      <div class="flex-1 min-h-0 flex flex-col">
+        <h2 class="flex-none text-sm font-semibold uppercase tracking-widest text-gray-400 mb-2">
+          Recent Events
+        </h2>
+        <div
+          id="event-log"
+          phx-hook="ScrollBottom"
+          class="flex-1 overflow-y-auto bg-gray-800 border border-gray-700 rounded p-3 font-mono text-xs leading-relaxed"
+        >
           <%= if Enum.empty?(@recent_events) do %>
-            <p class="text-gray-500">No events yet...</p>
+            <p class="text-gray-500">No events yet…</p>
           <% else %>
-            <%= for event <- @recent_events do %>
-              <div class="text-gray-300 mb-1 leading-relaxed"><%= event %></div>
+            <%!-- recent_events is newest-first; reverse so newest appears at bottom --%>
+            <%= for event <- Enum.reverse(@recent_events) do %>
+              <div class="text-gray-300 mb-0.5"><%= event %></div>
             <% end %>
           <% end %>
         </div>
@@ -138,3 +201,32 @@
   </div>
 
 </div>
+
+<%!-- ── Kill confirmation modal ─────────────────────────────────────────────── --%>
+<%= if @confirm_kill do %>
+  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div class="bg-gray-800 border border-red-700 rounded-lg p-6 w-80 shadow-xl">
+      <h3 class="text-lg font-bold mb-2">Kill worker?</h3>
+      <p class="text-sm text-gray-400 mb-6 font-mono break-all"><%= @confirm_kill %></p>
+      <p class="text-xs text-gray-500 mb-6">
+        Any in-progress tasks will be re-queued. Completed map tasks for this
+        worker will be re-run if a reduce worker still needs them.
+      </p>
+      <div class="flex gap-3">
+        <button
+          phx-click="cancel_kill"
+          class="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2 rounded text-sm transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          phx-click="confirm_kill"
+          phx-value-node={Atom.to_string(@confirm_kill)}
+          class="flex-1 bg-red-700 hover:bg-red-600 text-white py-2 rounded text-sm transition-colors"
+        >
+          Kill
+        </button>
+      </div>
+    </div>
+  </div>
+<% end %>
