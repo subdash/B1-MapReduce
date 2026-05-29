@@ -221,7 +221,6 @@ defmodule MrDashboardWeb.DashboardLive do
     |> Atom.to_string()
     |> String.split(".")
     |> List.last()
-    |> String.replace(~r/([a-z])([A-Z])/, "\\1 \\2")
-    |> String.replace(~r/([a-z])([A-Z])/, "\\1 \\2")
+    |> String.replace(~r/([a-z])([A-Z])|([A-Z])([A-Z][a-z])/, "\\1\\3 \\2\\4")
   end
 end
