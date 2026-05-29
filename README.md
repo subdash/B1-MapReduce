@@ -4,6 +4,9 @@ This is an implementation of the MapReduce programming model as defined in the 2
 
 The framework runs MapReduce jobs on a cluster of Erlang nodes. Currently it executes on a single machine, but the distributed architecture is designed to extend to multiple physical machines. The initial task is a word-frequency count across 20 large text files. A Phoenix LiveView dashboard provides real-time visualization of task progress across workers.
 
+<img width="3456" height="2070" alt="demo_final_clip" src="https://github.com/user-attachments/assets/b58e05fb-096f-49fb-a896-3025df1f9107" />
+
+
 ## Prerequisites
 
 - **Elixir 1.14+** and **Erlang/OTP 24+**
