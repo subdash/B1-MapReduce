@@ -13,13 +13,13 @@ defmodule MrWorker.MapTask do
       end)
       |> Enum.reverse()
 
-    # # Use hash function to get a bucket name and group results by bucket name 
-    # grouped_pairs =
-    #   Enum.group_by(pairs, fn {key, _value} -> :erlang.phash2(key, task.num_reducers) end)
-    #
+    # Use hash function to get a bucket name and group results by bucket name 
+    grouped_pairs =
+      Enum.group_by(pairs, fn {key, _value} -> :erlang.phash2(key, task.num_reducers) end)
+
     # For every bucket/value list pair:
     bucket_locations =
-      Enum.map(0..(task.num_reducers - 1), fn bucket ->
+      Enum.map(grouped_pairs, fn {bucket, pairs} ->
         pairs =
           if function_exported?(task_module, :combine, 2) do
             # Call combine if it is defined

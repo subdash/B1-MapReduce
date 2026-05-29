@@ -403,7 +403,10 @@ defmodule MrMaster.Master do
         )
 
       # Send the task to the worker
-      GenServer.cast({MrWorker.Worker, idle_worker_node}, {:run_map, task_assigned, state.task_module, state.workers})
+      GenServer.cast(
+        {MrWorker.Worker, idle_worker_node},
+        {:run_map, task_assigned, state.task_module, state.workers}
+      )
 
       # Recursively call the function until there are no more idle tasks or workers
       assign_pending_tasks(updated_state)
@@ -458,7 +461,10 @@ defmodule MrMaster.Master do
         )
 
       # Send the task to the worker
-      GenServer.cast({MrWorker.Worker, idle_worker_node}, {:run_reduce, task_assigned, state.task_module, state.workers})
+      GenServer.cast(
+        {MrWorker.Worker, idle_worker_node},
+        {:run_reduce, task_assigned, state.task_module, state.workers}
+      )
 
       # Recursively call the function until there are no more idle tasks or workers
       assign_pending_tasks(updated_state)
@@ -502,6 +508,7 @@ defmodule MrMaster.Master do
                   raise "BUG: map task #{task_id} is completed but has no intermediate locations"
               end
             end
+            |> Enum.filter(fn {_node, location} -> not is_nil(location) end)
 
           # Construct a reduce task -- we can reuse the bucket index as the task id
           # and bucket id
