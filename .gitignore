@@ -6,4 +6,4 @@ deps/
 *.beam
 .claude/
 sample-data/
-
+*.log
