@@ -24,6 +24,13 @@ When a reduce task completes successfully, it writes its output to a bucket and 
 
 Locality becomes important during the reduce phase since RPC calls between reduce workers and the nodes containing their intermediate files become more latent the further away they are in the network topology. The master takes into account the distance between nodes (this is simulated in this framework by assigning coordinates to nodes) when assigning reduce tasks by prioritizing reduce workers whose mean distance to the source map workers is the smallest.
 
+<img width="1256" height="1682" alt="B1 MapReduce phase diagram" src="https://github.com/user-attachments/assets/8017736a-8173-41d7-bbcc-1a2bc1d576d1" />
+
+## Limitations, tradeoffs and improvements
+- **One map task per file**: A more efficient implementation would read byte ranges of a configurable size from files. This would reduce the chance of failure when processing large files and allow for much higher parallelism at the cost of the minor additional overhead of more map tasks to manage and more RPC calls during the reduce phase.
+- **Can only run on one machine**: With some minor modifications, we could extend this framework to assign tasks to nodes on remote machines so that it could theoretically be used for production workloads. The current implementation however assumes that all worker nodes live on the same machine as the master node, so parallelism is limited by the resources of the machine it runs on.
+- **Stale file locations**: When a map worker dies during the reduce phase, the locations of the map workers intermediate files refer to a node that is now dead, so the files can no longer be fetched. The worker that picks up the reduce task will get stuck because it will be unable to fetch those intermediate files. The fix is to roll the job back to the mapping phase and re-assign the map task, rewriting those intermediate files and submitting valid new locations to the master.
+
 ## Prerequisites
 
 - **Elixir 1.14+** and **Erlang/OTP 24+**
