@@ -7,7 +7,13 @@ defmodule MrDashboardWeb.DashboardLive do
   def mount(_params, _session, socket) do
     # Initialise UI-only state before the first data fetch so assign_master_state
     # never has to worry about these keys not existing.
-    socket = assign(socket, selected_worker: nil, confirm_kill: nil, final_elapsed_time: nil, task_type: nil)
+    socket =
+      assign(socket,
+        selected_worker: nil,
+        confirm_kill: nil,
+        final_elapsed_time: nil,
+        task_type: nil
+      )
 
     if connected?(socket) do
       Process.send_after(self(), :update_state, @poll_interval_ms)
@@ -119,11 +125,12 @@ defmodule MrDashboardWeb.DashboardLive do
     job_complete = state.phase == :done
 
     # Capture elapsed time when job completes, then freeze it
-    final_elapsed = if job_complete and socket.assigns[:final_elapsed_time] == nil do
-      format_elapsed_ms(state.start_time)
-    else
-      socket.assigns[:final_elapsed_time]
-    end
+    final_elapsed =
+      if job_complete and socket.assigns[:final_elapsed_time] == nil do
+        format_elapsed_ms(state.start_time)
+      else
+        socket.assigns[:final_elapsed_time]
+      end
 
     elapsed_time = final_elapsed || format_elapsed_ms(state.start_time)
 
@@ -214,7 +221,6 @@ defmodule MrDashboardWeb.DashboardLive do
   #   MrWorker.Tasks.WordCount -> "Word Count"
   #   MrWorker.Tasks.DistributedGrep -> "Distributed Grep"
   #   nil -> "Unknown"
-  defp format_task_name(nil), do: "Unknown"
 
   defp format_task_name(task_module) do
     task_module
