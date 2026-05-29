@@ -5,7 +5,8 @@ defmodule BabysFirstMapreduce.MixProject do
     [
       app: :babys_first_mapreduce,
       version: "0.1.0",
-      apps_path: "apps"
+      apps_path: "apps",
+      listeners: [Phoenix.CodeReloader]
     ]
   end
 end
