@@ -7,7 +7,7 @@ defmodule MrDashboardWeb.DashboardLive do
   def mount(_params, _session, socket) do
     # Initialise UI-only state before the first data fetch so assign_master_state
     # never has to worry about these keys not existing.
-    socket = assign(socket, selected_worker: nil, confirm_kill: nil, final_elapsed_time: nil)
+    socket = assign(socket, selected_worker: nil, confirm_kill: nil, final_elapsed_time: nil, task_type: nil)
 
     if connected?(socket) do
       Process.send_after(self(), :update_state, @poll_interval_ms)
@@ -110,7 +110,8 @@ defmodule MrDashboardWeb.DashboardLive do
       worker_memory: %{},
       elapsed_time: nil,
       job_complete: false,
-      final_elapsed_time: nil
+      final_elapsed_time: nil,
+      task_type: nil
     )
   end
 
@@ -126,6 +127,9 @@ defmodule MrDashboardWeb.DashboardLive do
 
     elapsed_time = final_elapsed || format_elapsed_ms(state.start_time)
 
+    # Extract and format task type
+    task_type = if state.task_module, do: format_task_name(state.task_module), else: nil
+
     assign(socket,
       master_connected: true,
       workers: state.workers,
@@ -136,7 +140,8 @@ defmodule MrDashboardWeb.DashboardLive do
       worker_memory: fetch_worker_memory(state.workers),
       elapsed_time: elapsed_time,
       job_complete: job_complete,
-      final_elapsed_time: final_elapsed
+      final_elapsed_time: final_elapsed,
+      task_type: task_type
     )
   end
 
@@ -202,5 +207,21 @@ defmodule MrDashboardWeb.DashboardLive do
     seconds = div(elapsed_ms, 1000)
     millis = rem(elapsed_ms, 1000)
     {seconds, millis}
+  end
+
+  # Convert task module atom to human-readable task name.
+  # Examples:
+  #   MrWorker.Tasks.WordCount -> "Word Count"
+  #   MrWorker.Tasks.DistributedGrep -> "Distributed Grep"
+  #   nil -> "Unknown"
+  defp format_task_name(nil), do: "Unknown"
+
+  defp format_task_name(task_module) do
+    task_module
+    |> Atom.to_string()
+    |> String.split(".")
+    |> List.last()
+    |> String.replace(~r/([a-z])([A-Z])/, "\\1 \\2")
+    |> String.replace(~r/([a-z])([A-Z])/, "\\1 \\2")
   end
 end
