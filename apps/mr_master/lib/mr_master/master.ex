@@ -103,7 +103,7 @@ defmodule MrMaster.Master do
 
   @impl true
   def handle_cast({:map_done, task_id, bucket_locations}, state) do
-    # If primary task is completed already, that means a bakcup map task
+    # If primary task is completed already, that means a backup map task
     # just sent its :map_done message. We must mark the backup task as completed.
     if state.map_tasks[task_id].status == :completed do
       state =
