@@ -20,6 +20,14 @@
         <% end %>
       </div>
 
+      <%= if @task_type do %>
+        <div class="flex items-center gap-2">
+          <span class="px-2.5 py-1 rounded-full font-mono bg-blue-900 text-blue-200 text-xs">
+            <%= @task_type %>
+          </span>
+        </div>
+      <% end %>
+
       <%= if @elapsed_time do %>
         <div class="flex flex-col items-center">
           <div class={"text-4xl font-mono font-bold tracking-tight " <>
