@@ -87,11 +87,7 @@ You can customize the run with options:
 mix mr.start --workers 8 --reducers 4 --input sample-data/
 ```
 
-Watch real-time progress on the dashboard at `http://localhost:4000`:
-
-![LiveView Dashboard Demo](docs/live_view_demo_gif.gif)
-
-The dashboard shows all active workers, their current task assignments, and real-time job progress.
+Watch real-time progress on the dashboard at `http://localhost:4000`. The dashboard shows all active workers, their current task assignments, and real-time job progress.
 
 ## AI disclaimer
 
