@@ -98,7 +98,7 @@ defmodule Mix.Tasks.Mr.Start do
         env_vars = "MR_START_MASTER=false MR_COORDS=#{x},#{y}"
 
         command =
-          "sh -c '#{env_vars} elixir --name #{worker_name} --cookie secret -S mix run --no-compile --no-halt >> worker-#{worker_num}.log 2>&1'"
+          "sh -c '#{env_vars} elixir --name #{worker_name} --cookie #{cookie} -S mix run --no-compile --no-halt >> worker-#{worker_num}.log 2>&1'"
 
         Port.open({:spawn, command}, [])
       end)
