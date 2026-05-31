@@ -48,29 +48,28 @@ What still ties the system to a single machine, all in `apps/mr_master/lib/mix/t
 
 **What to build:** Move per-machine / per-instance settings into `config/runtime.exs` so they can be set at startup via environment variables, without recompiling. Add the new `min_workers` and base-dir keys.
 
-**Files to modify/create:**
-- Create `config/runtime.exs` (currently absent) — read env vars at runtime.
-- Modify `config/config.exs` (lines 53-61) — keep sane compile-time defaults; let runtime override.
+**Files to modify:**
+- `config/runtime.exs` — **already exists** (standard Phoenix-generated; configures the `mr_dashboard` endpoint). **Append** the `mr_master`/`mr_worker` blocks below; keep the existing dashboard config intact. Add the new blocks at top level (all environments), NOT inside the `if config_env() == :prod` block — `mix mr.start` runs in dev.
+- `config/config.exs` (lines 53-61) — currently parses `MR_COORDS`/`MR_START_MASTER` and sets `:mr_worker, master_node`/`coords` at compile time. Remove that env parsing (it moves to `runtime.exs`); leave only plain compile-time defaults so the same keys aren't set in two places.
 
 **Details:**
 
 The values that must vary per machine/instance: master node name, cookie, worker coords, temp base dir, output base dir, and `min_workers`. `config/config.exs` is evaluated at compile time, so it cannot give two workers on the same build different coords at runtime. `config/runtime.exs` runs at boot and is the correct home.
 
-Sketch (`config/runtime.exs`):
+Sketch of the blocks to **append** to `config/runtime.exs` (the file already has `import Config` on line 1 — don't repeat it):
 ```elixir
-import Config
+# import Config  <- already at top of existing file; shown only for context
 
 # Shared
 cookie = System.get_env("MR_COOKIE", "secret") |> String.to_atom()
 master_node = System.get_env("MR_MASTER_NODE", "master@127.0.0.1") |> String.to_atom()
 
-# Master-only
+# Master-only (master owns the output destination; it never touches temp)
 config :mr_master,
   cookie: cookie,
   master_node: master_node,
   min_workers: String.to_integer(System.get_env("MR_MIN_WORKERS", "4")),
-  output_base_dir: System.get_env("MR_OUTPUT_DIR", "output"),
-  temp_base_dir: System.get_env("MR_TEMP_DIR", "tmp")
+  output_base_dir: System.get_env("MR_OUTPUT_DIR", "output")
 
 # Worker-only
 config :mr_worker,
@@ -87,7 +86,18 @@ case System.get_env("MR_COORDS") do
 end
 ```
 
-Then simplify `config/config.exs:53-61` to compile-time defaults only (it can keep `start_master` and a default coords fallback, but the env-var parsing moves to runtime.exs).
+Then simplify `config/config.exs:53-61`. Because `config.exs` runs at **compile time**, any `System.get_env` there is read once and baked into the build — fatal for per-launch values like coords. So move that parsing to `runtime.exs` (above) and leave only static compile-time defaults. Concretely:
+
+- **Keep** `start_master` as-is — it's a build-level switch (`master/application.ex:10`, `worker/application.ex:11`), constant for a build, no need to vary per launch.
+- **Remove** the `MR_COORDS` parsing and the hardcoded `master_node` — both now come from `runtime.exs` at boot.
+- **Do not** set a `coords` default here. Per Task 3.2, an unset `coords` is the signal for the worker to self-assign random coordinates; a fixed default would suppress that behavior.
+
+After the change, `config.exs:53-61` collapses to roughly:
+```elixir
+config :mr_master,
+  start_master: System.get_env("MR_START_MASTER", "false") == "true"
+# master_node + coords now come from config/runtime.exs at boot
+```
 
 **Why:** Per-machine values must be settable at boot on each machine without editing or recompiling code. Centralizing them in `runtime.exs` makes the config surface explicit and machine-portable.
 
@@ -204,7 +214,13 @@ This replaces the documented raw `elixir --name ... -S mix run` invocation with 
 
 ### Task 3.2: Worker self-assigns random coords when none configured
 
-**What to build:** Make coords optional. If `:mr_worker, :coords` is unset, the worker generates random coords at startup instead of crashing on `fetch_env!`.
+**Status: ✅ Done — implemented early, during Task 1.1.** Removing the compile-time `coords` default in Task 1.1 made `application.ex` crash on `fetch_env!` when `MR_COORDS` was unset, so the get-or-generate fallback below was applied at that point (`apps/mr_worker/lib/mr_worker/application.ex:14-18`). Verified by `mix test` booting with `MR_COORDS` unset.
+
+**Still open (deferred to Task 3.1):** the `--coords` CLI flag for `mix mr.worker`, which depends on that launch task existing.
+
+**Follow-up (deferred):** make `MR_COORDS` parsing tolerant of integer input — `String.to_float("80")` raises; use `Float.parse/1` so a manual `MR_COORDS=80,20` doesn't crash.
+
+**What was built:** Make coords optional. If `:mr_worker, :coords` is unset, the worker generates random coords at startup instead of crashing on `fetch_env!`.
 
 **Files to modify:**
 - `apps/mr_worker/lib/mr_worker/application.ex` (lines 12-13) — or `worker.ex:7-8`
@@ -362,12 +378,12 @@ Mirror the existing master test style/helpers. Also assert `wait_for_workers/2`'
 
 ## Implementation Order
 
-1. Task 1.1 — runtime config surface
+1. ✅ Task 1.1 — runtime config surface
 2. Task 1.2 — example config + guide
 3. Task 2.1 — master node name + cookie from config
 4. Task 2.2 — `--distributed` mode + `min_workers` gate
-5. Task 3.1 — `mix mr.worker` launch task
-6. Task 3.2 — worker self-assigns random coords
+5. Task 3.1 — `mix mr.worker` launch task (incl. `--coords` flag, the remaining half of 3.2)
+6. ✅ Task 3.2 — worker self-assigns random coords (worker half done early during 1.1; CLI flag pending in 3.1)
 7. Task 4.1 — configurable worker-local temp base dir
 8. Task 4.2 — master output collector + reduce push via RPC
 9. Task 4.3 — output/filesystem options doc

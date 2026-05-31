@@ -46,7 +46,10 @@ defmodule Mix.Tasks.Mr.Start do
     start_time = System.monotonic_time(:millisecond)
 
     # Start Erlang distribution in this process as the master node
-    case :net_kernel.start([:"master@127.0.0.1", :longnames]) do
+    master_node = Application.fetch_env!(:mr_master, :master_node)
+    cookie = Application.fetch_env!(:mr_master, :cookie)
+
+    case :net_kernel.start([master_node, :longnames]) do
       {:ok, _} ->
         Logger.info("[master] Erlang distribution started: #{node()}")
 
@@ -54,7 +57,7 @@ defmodule Mix.Tasks.Mr.Start do
         raise "Failed to start Erlang distribution: #{inspect(reason)}"
     end
 
-    Node.set_cookie(:secret)
+    Node.set_cookie(cookie)
 
     # Start the master GenServer locally
     case MrMaster.Master.start_link([]) do

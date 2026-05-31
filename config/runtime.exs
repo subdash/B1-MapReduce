@@ -7,6 +7,33 @@ import Config
 # any compile-time configuration in here, as it won't be applied.
 # The block below contains prod specific runtime configuration.
 
+# Shared
+cookie = System.get_env("MR_COOKIE", "secret") |> String.to_atom()
+master_node = System.get_env("MR_MASTER_NODE", "master@127.0.0.1") |> String.to_atom()
+
+# Master-only
+config :mr_master,
+  cookie: cookie,
+  master_node: master_node,
+  min_workers: String.to_integer(System.get_env("MR_MIN_WORKERS", "4")),
+  output_base_dir: System.get_env("MR_OUTPUT_DIR", "output")
+
+# Worker-only
+config :mr_worker,
+  cookie: cookie,
+  master_node: master_node,
+  temp_base_dir: System.get_env("MR_TEMP_DIR", "tmp")
+
+# Coords: explicit MR_COORDS overrides the worker's self-assignment of coordinates
+case System.get_env("MR_COORDS") do
+  nil ->
+    :ok
+
+  str ->
+    [x, y] = str |> String.split(",") |> Enum.map(&Float.parse/1)
+    config :mr_worker, coords: {x, y}
+end
+
 # ## Using releases
 #
 # If you use `mix release`, you need to explicitly enable the server

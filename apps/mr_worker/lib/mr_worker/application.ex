@@ -10,7 +10,12 @@ defmodule MrWorker.Application do
     children =
       if Application.get_env(:mr_master, :start_master, false) == false do
         master_node = Application.fetch_env!(:mr_worker, :master_node)
-        coords = Application.fetch_env!(:mr_worker, :coords)
+
+        coords =
+          case Application.get_env(:mr_worker, :coords) do
+            nil -> {Enum.random(0..99) * 1.0, Enum.random(0..99) * 1.0}
+            c -> c
+          end
 
         [
           MrWorker.FileServer,
