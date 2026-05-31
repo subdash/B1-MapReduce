@@ -250,11 +250,15 @@ defmodule MrMaster.Master do
         end)
 
       updated_reduce_tasks =
-        Map.new(state.reduce_tasks, fn {task_id, task} ->
-          %MrProtocol.ReduceTask{} = task
+        Map.new(state.reduce_tasks, fn {task_id, task = %MrProtocol.ReduceTask{}} ->
+          has_stale_locations =
+            Enum.any?(task.locations, fn {map_worker_node, _file_path} ->
+              map_worker_node == node
+            end)
 
-          if task.assigned_to == node and task.status == :in_progress do
-            {task_id, %MrProtocol.ReduceTask{task | status: :idle, assigned_to: nil}}
+          if task.status == :in_progress and (task.assigned_to == node or has_stale_locations) do
+            {task_id,
+             %MrProtocol.ReduceTask{task | status: :idle, assigned_to: nil, locations: []}}
           else
             {task_id, task}
           end
@@ -262,14 +266,42 @@ defmodule MrMaster.Master do
 
       num_updated_reduce_tasks =
         Enum.count(state.reduce_tasks, fn {_task_id, task} ->
-          task.assigned_to == node and task.status == :in_progress
+          Enum.any?(task.locations, fn {map_worker_node, _file_path} ->
+            map_worker_node == node
+          end)
         end)
+
+      map_task_ids_to_requeue =
+        state.map_tasks
+        |> Enum.filter(fn {_id, task} ->
+          task.assigned_to == node and task.status in [:in_progress, :completed]
+        end)
+        |> Enum.map(fn {id, _task} -> id end)
 
       state = put_in(state.map_tasks, updated_map_tasks)
       state = put_in(state.reduce_tasks, updated_reduce_tasks)
       state = assign_pending_tasks(state)
       tasks_updated = num_updated_map_tasks + num_updated_reduce_tasks
       state = log_event(state, "[master] node_down | node=#{node} requeued=#{tasks_updated}")
+
+      state =
+        if state.phase == :reducing do
+          updated_intermediate_locations =
+            Map.drop(state.intermediate_locations, map_task_ids_to_requeue)
+
+          state = %{
+            state
+            | phase: :mapping,
+              intermediate_locations: updated_intermediate_locations
+          }
+
+          log_event(
+            state,
+            "[master] phase_rolled_back_to_mapping | node=#{node} reason=map_worker_died_during_reduce"
+          )
+        else
+          state
+        end
 
       {:noreply, state}
     end

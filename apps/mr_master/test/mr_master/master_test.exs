@@ -120,7 +120,7 @@ defmodule MasterTest do
   end
 
   @tag :tmp_dir
-  test "tasks are re-queued correctly when a node_down message is received", %{tmp_dir: tmp_dir} do
+  test "tasks are re-queued correctly when a nodedown message is received", %{tmp_dir: tmp_dir} do
     create_files(tmp_dir, 2)
     w1 = worker_info(:worker1@localhost)
     w2 = worker_info(:worker2@localhost)
@@ -237,6 +237,77 @@ defmodule MasterTest do
     assert state.reduce_tasks[w1_task_id].status == :in_progress
     assert Map.has_key?(state.backup_tasks, {:reduce, w1_task_id})
     assert state.backup_tasks[{:reduce, w1_task_id}] == w2.node
+  end
+
+  @tag :tmp_dir
+  test "phase rolls back to mapping when map workers die during reduce phase", %{tmp_dir: tmp_dir} do
+    create_files(tmp_dir, 6)
+    w1 = worker_info(:worker1@localhost)
+    w2 = worker_info(:worker2@localhost)
+
+    GenServer.call({MrMaster.Master, node()}, {:register, w1})
+    GenServer.call({MrMaster.Master, node()}, {:register, w2})
+
+    GenServer.call(
+      {MrMaster.Master, node()},
+      {:submit_job, job_opts(tmp_dir, task_module: :fake_task3, num_reducers: 2)}
+    )
+
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+
+    Enum.each(state.map_tasks, fn {task_id, map_task = %MrProtocol.MapTask{}} ->
+      locs = bucket_locations(map_task.assigned_to, state.num_reducers)
+      GenServer.cast({MrMaster.Master, node()}, {:map_done, task_id, locs})
+    end)
+
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    assert state.phase == :reducing
+
+    # Before killing the node, build a couple of lists:
+    # affected ids => reduce tasks whose locations point to the dead node
+    # w1_map_ids => map tasks assigned to w1
+    # w2_map_ids => map tasks assigned to w2
+
+    affected_ids =
+      state.reduce_tasks
+      |> Enum.filter(fn {_id, t} -> Enum.any?(t.locations, fn {n, _} -> n == w2.node end) end)
+      |> Enum.map(fn {id, _} -> id end)
+
+    assert affected_ids != []
+
+    w1_map_ids =
+      state.map_tasks
+      |> Enum.filter(fn {_id, t} -> t.assigned_to == w1.node end)
+      |> Enum.map(fn {id, _} -> id end)
+
+    w2_map_ids =
+      state.map_tasks
+      |> Enum.filter(fn {_id, t} -> t.assigned_to == w2.node end)
+      |> Enum.map(fn {id, _} -> id end)
+
+    assert w2_map_ids != []
+    Process.send(GenServer.whereis(MrMaster.Master), {:nodedown, w2.node}, [])
+    state = GenServer.call({MrMaster.Master, node()}, :get_state)
+    # After killing node, we should revert to the mapping phase. We should see that all
+    # affected reduce tasks are idle and stripped of their previous locations. We should
+    # also see that the map tasks assigned to the killed worker are idle/unassigned where the
+    # other map tasks stay completed with their previous assignee.
+    assert state.phase == :mapping
+
+    assert Enum.all?(affected_ids, fn id ->
+             t = state.reduce_tasks[id]
+             t.status == :idle and t.locations == []
+           end)
+
+    assert Enum.all?(w2_map_ids, fn id ->
+             t = state.map_tasks[id]
+             t.status == :idle and t.assigned_to == nil
+           end)
+
+    assert Enum.all?(w1_map_ids, fn id ->
+             t = state.map_tasks[id]
+             t.status == :completed and t.assigned_to == w1.node
+           end)
   end
 
   @tag :tmp_dir
