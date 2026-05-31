@@ -275,7 +275,7 @@ defmodule MrMaster.OutputCollector do
 end
 ```
 
-Reduce side: today `reduce_task.ex` writes locally via `File.write` at `reduce_task.ex:34` (`output_dir`-based), and `worker.ex:45` passes the literal `"output/"`. Change `ReduceTask.execute` so that, instead of writing to a local `output_dir`, it builds the output binary in memory and returns it (or pushes it directly). Then the worker pushes to the master, reusing the throttled RPC path so locality simulation still applies to the result transfer:
+Reduce side: today `reduce_task.ex` writes locally via `File.write` at `reduce_task.ex:34` (`output_dir`-based), and `worker.ex:45` passes the literal `"output/"`. Change `ReduceTask.execute` into a **pure function**: it computes the result and **returns `{filename, binary}`** — no filesystem write, no RPC, no master dependency. (Drop the `output_dir` parameter from its signature.) The **worker** owns the push, reusing the throttled RPC path so locality simulation still applies to the result transfer:
 ```elixir
 # in worker.ex run_reduce, after ReduceTask.execute returns the {filename, binary}
 MrWorker.RPC.call(master_node, MrMaster.OutputCollector,
@@ -283,7 +283,9 @@ MrWorker.RPC.call(master_node, MrMaster.OutputCollector,
 ```
 `filename` should be deterministic per reduce bucket (e.g. `"bucket-#{task.bucket}.txt"`) so reruns overwrite rather than duplicate. Output for word-count is small (aggregated counts), so a single binary per bucket is fine; if a future high-volume task needs it, chunk the transfer (the current `FileServer` ships whole files too, so this matches existing behavior).
 
-**Why:** Produces one coherent output directory on the master with zero shared-filesystem setup, reusing the RPC file-transfer pattern already in the codebase. The master owns the output destination, as in the paper's coordinator model.
+**Why:** Produces one coherent output directory on the master with zero shared-filesystem setup, reusing the RPC file-transfer pattern already in the codebase. The master owns the output destination, as in the paper's coordinator model. Keeping `ReduceTask.execute` pure (returns `{filename, binary}`, no side effects) also makes it independently unit-testable with no master or filesystem — easier to test than the current write-then-read-back version.
+
+**Local testing note:** This entire flow runs on a single machine — master and workers are separate Erlang nodes whether on one box or three, and RPC is location-transparent, so reduce output lands in the master's `output/` exactly as today. Validate locally first; the multi-machine run changes only node hostnames.
 
 ---
 
