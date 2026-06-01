@@ -31,12 +31,7 @@ case System.get_env("MR_COORDS") do
 
   str ->
     [x, y] =
-      str
-      |> String.split(",")
-      |> Enum.map(fn s ->
-        {f, _rest} = Float.parse(s)
-        f
-      end)
+      MrProtocol.ParseCoords.parse_coords(str)
 
     config :mr_worker, coords: {x, y}
 end

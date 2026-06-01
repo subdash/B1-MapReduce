@@ -59,50 +59,75 @@ defmodule MrWorker.Worker do
   end
 
   def handle_info(:connect_to_master, state) do
-    master_node = state.master_node
+    max_attempts = 100
 
-    case try_connect(master_node, state) do
-      :ok ->
-        Logger.info("[worker] connected to master")
-        {:noreply, state}
+    if state.connection_attempt >= max_attempts do
+      Logger.error(
+        "[worker] giving up: master unreachable after #{max_attempts} attempts | " <>
+          "node=#{state.master_node}"
+      )
 
-      :retry ->
-        # Exponential backoff capped at 5 seconds
-        backoff_ms = min(100 * Integer.pow(2, state.connection_attempt), 5000)
+      System.stop(1)
+      {:noreply, state}
+    else
+      case try_connect(state.master_node, state.coords) do
+        :ok ->
+          Logger.info("[worker] registered with master | node=#{state.master_node}")
+          {:noreply, state}
 
-        Logger.debug(
-          "[worker] connection attempt #{state.connection_attempt + 1}, retrying in #{backoff_ms}ms"
-        )
+        :retry ->
+          # Exponential backoff capped at 5 seconds
+          backoff_ms = min(100 * Integer.pow(2, state.connection_attempt), 5000)
 
-        Process.send_after(self(), :connect_to_master, backoff_ms)
-        {:noreply, %{state | connection_attempt: state.connection_attempt + 1}}
+          Logger.debug(
+            "[worker] register attempt #{state.connection_attempt + 1} failed, " <>
+              "retry in #{backoff_ms}ms"
+          )
+
+          Process.send_after(self(), :connect_to_master, backoff_ms)
+          {:noreply, %{state | connection_attempt: state.connection_attempt + 1}}
+      end
     end
   end
 
-  defp try_connect(master_node, state) do
-    max_attempts = 100
-    attempt = state.connection_attempt
-
-    if attempt >= max_attempts do
-      raise "Failed to connect to master after #{attempt} attempts"
-    end
-
+  # Returns :ok | :retry and raises only for the non-retryable error
+  defp try_connect(master_node, coords) do
     case Node.connect(master_node) do
       true ->
-        # Try to register
-        case GenServer.call(
-               {MrMaster.Master, master_node},
-               {:register, %MrProtocol.WorkerInfo{node: node(), coords: state.coords}},
-               5000
-             ) do
-          :ok -> :ok
-          _ -> :retry
-        end
+        register(master_node, coords)
 
       false ->
+        # Master not yet reachable -- worth retrying
+        :retry
+
+      :ignored ->
+        raise "[worker] cannot connect: distribution not started (net_kernel.start did not run)"
+    end
+  end
+
+  defp register(master_node, coords) do
+    worker_info = %MrProtocol.WorkerInfo{node: node(), coords: coords}
+
+    try do
+      case GenServer.call(
+             {MrMaster.Master, master_node},
+             {:register, worker_info},
+             5000
+           ) do
+        :ok ->
+          :ok
+
+        other ->
+          Logger.warning("[worker] unexpected register reply | reply=#{inspect(other)}")
+          :retry
+      end
+    catch
+      # GenServer.call signals failure by exiting, not raising. Timeout, :noproc, :nodedown 
+      # are all handled here and would not be handled by rescue. We do not want to rescue the
+      # error class.
+      :exit, reason ->
+        Logger.debug("[worker] register call failed | reason=#{inspect(reason)}")
         :retry
     end
-  rescue
-    _ -> :retry
   end
 end

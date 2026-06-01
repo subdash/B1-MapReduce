@@ -189,9 +189,15 @@ wait_for_workers(expected)
 
 ---
 
-## Phase 3: Worker Launch Path
+## Phase 3: Worker Launch Path — ✅ COMPLETE
 
-### Task 3.1: Add a `mix mr.worker` task
+Task 3.1 (`mix mr.worker`) done and verified end-to-end; Task 3.2 (coords self-assign) done earlier. A separately-launched worker VM self-registers with the master over Erlang distribution.
+
+> **Caveat:** verified locally on `127.0.0.1` only. Real cross-machine operation (LAN hostname resolution, epmd reachable between hosts — see `config/multi_machine_example.md`) is still untested. No code change is needed for it; it's an environment/networking test.
+
+### Task 3.1: Add a `mix mr.worker` task — ✅ Done
+
+**Status:** Implemented in `apps/mr_worker/lib/mix/tasks/mr/worker.ex` and verified end-to-end via the local 3-terminal run — `mix mr.start --distributed` with `--min-workers 1` and again with `--min-workers 2`, workers launched via `mix mr.worker --name worker@127.0.0.1`; the master logged `worker_registered`, the gate released, and the job completed both times. Registration handshake (`Node.connect` → `{:register, …}`) hardened during review: `catch :exit` for call failures, attempt-count breaker in `handle_info`, `:ignored` raises loudly (`apps/mr_worker/lib/mr_worker/worker.ex`).
 
 **What to build:** A Mix task that starts a single worker node on any machine. It starts Erlang distribution under the given name + cookie, then lets the existing `MrWorker.Application`/`MrWorker.Worker` registration handshake run.
 
@@ -201,12 +207,12 @@ wait_for_workers(expected)
 **Details:**
 
 The task should:
-1. Parse `--name` (required), optional `--coords "x,y"`, optional `--master`/`--cookie` overrides (else from config).
-2. Start distribution: `:net_kernel.start([String.to_atom(name), :longnames])`; `Node.set_cookie(cookie)`.
+1. Parse `--name` (required) — the only flag. All other per-launch values (master node, cookie, coords) come from environment variables (`MR_MASTER_NODE`, `MR_COOKIE`, `MR_COORDS`) via `runtime.exs`. **Decided during 3.1: no `--coords`/`--master`/`--cookie` flags** — they would only shadow existing env vars, duplicating one knob with two.
+2. Start distribution: `:net_kernel.start([String.to_atom(name), :longnames])`; `Node.set_cookie(cookie)` (cookie read from `:mr_worker, :cookie`, which `runtime.exs` populates from `MR_COOKIE`).
 3. Ensure `:mr_worker` is started (the supervisor starts `MrWorker.Worker` because `:mr_master, :start_master` is `false` on worker machines — see `application.ex:11`).
 4. `Process.sleep(:infinity)` to keep the node alive (mirrors how `mr.start` stays up).
 
-This replaces the documented raw `elixir --name ... -S mix run` invocation with one consistent entrypoint that matches how the master is started. Coords flow: `--coords` → set `:mr_worker, :coords` before the app starts; if absent, the worker self-assigns (Task 3.2).
+This replaces the documented raw `elixir --name ... -S mix run` invocation with one consistent entrypoint that matches how the master is started. Coords flow: `MR_COORDS` → parsed in `runtime.exs` into `:mr_worker, :coords`; if unset, the worker self-assigns random coords (Task 3.2, `application.ex:14-18`).
 
 **Why:** A single, discoverable launch command per worker, symmetric with `mix mr.start`, that carries the per-instance settings.
 
@@ -216,7 +222,7 @@ This replaces the documented raw `elixir --name ... -S mix run` invocation with 
 
 **Status: ✅ Done — implemented early, during Task 1.1.** Removing the compile-time `coords` default in Task 1.1 made `application.ex` crash on `fetch_env!` when `MR_COORDS` was unset, so the get-or-generate fallback below was applied at that point (`apps/mr_worker/lib/mr_worker/application.ex:14-18`). Verified by `mix test` booting with `MR_COORDS` unset.
 
-**Still open (deferred to Task 3.1):** the `--coords` CLI flag for `mix mr.worker`, which depends on that launch task existing.
+**Resolved (Task 3.1):** decided against a `--coords` CLI flag. `MR_COORDS` (parsed in `runtime.exs`) already overrides coords per-launch, so a flag would only duplicate it. `mix mr.worker` takes `--name` only.
 
 **Follow-up (deferred):** make `MR_COORDS` parsing tolerant of integer input — `String.to_float("80")` raises; use `Float.parse/1` so a manual `MR_COORDS=80,20` doesn't crash.
 
