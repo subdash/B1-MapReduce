@@ -30,8 +30,18 @@ count it toward the total.)
 - **Same build everywhere.** Check out the **same git commit** on all machines and build
   it (`mix deps.get && mix compile`). A divergent build risks message-decoding mismatches
   between nodes.
-- **Same Elixir/OTP.** Match major Elixir and Erlang/OTP versions across machines
-  (`elixir --version`).
+- **Same Elixir/OTP — pinned via `.tool-versions`.** The repo pins the exact toolchain
+  (Erlang/OTP 29.0, Elixir 1.20.0-rc.5) in `/.tool-versions`. The apps require
+  `elixir ~> 1.20-rc`, so a plain `brew install elixir` (older stable) **won't compile** —
+  reproduce the toolchain with [`asdf`](https://asdf-vm.com) instead:
+  ```bash
+  brew install asdf autoconf openssl@3 wxwidgets   # asdf + Erlang build deps
+  asdf plugin add erlang && asdf plugin add elixir
+  asdf install                                      # reads .tool-versions in the repo dir
+  ```
+  `asdf install` builds OTP 29 from source (a one-time ~10–20 min compile per machine). If
+  asdf can't find the exact Elixir build string, list options with
+  `asdf list-all elixir | grep 1.20` and adjust the `elixir` line in `.tool-versions`.
 - **Input must be reachable by each worker.** Map workers read input files from the
   `--input` path locally, so that path must exist on **every** machine running a worker
   (copy `sample-data/` to each, or use an identical path). Only *final output* is
