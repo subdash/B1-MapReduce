@@ -340,7 +340,11 @@ MrWorker.RPC.call(master_node, MrMaster.OutputCollector,
 
 ## Phase 5: Testing & Documentation
 
-### Task 5.1: Test the min-workers gate and self-registration
+### Task 5.1: Test the min-workers gate and self-registration — ✅ Done
+
+**Status:** Done and reviewed. `apps/mr_master/test/mr_master/multi_machine_test.exs` drives the `MrMaster.Master` GenServer directly to prove the **mid-job-join** behavior: submit a job with zero workers (assert phase `:mapping`, all map tasks unassigned), then register a worker and assert exactly one map task is assigned to it and the worker goes `:busy` (the `:register` → `assign_pending_tasks/1` path). Mirrors `master_test.exs` style/helpers; `ExUnit.start()` left to `test_helper.exs`.
+
+**Accepted gap:** the `min_workers` readiness gate is **not** unit-tested. It lives in the Mix task (`start.ex` `wait_for_workers/2` → `poll_until`), not in the Master — `submit_job` always advances to `:mapping`, so there's nothing in the GenServer to assert the gate against. Gate behavior is covered by the live distributed runs already performed; developer accepted this rather than extracting the predicate purely to unit-test it.
 
 **What to build:** A test verifying the master begins only after `min_workers` register, and that a worker registering after job submission still receives pending tasks (the existing `assign_pending_tasks` path).
 
@@ -404,7 +408,7 @@ Mirror the existing master test style/helpers. Also assert `wait_for_workers/2`'
 7. ✅ Task 4.1 — configurable worker-local temp base dir
 8. ✅ Task 4.2 — master output collector + reduce push via RPC
 9. ✅ Task 4.3 — output/filesystem options doc
-10. Task 5.1 — gate + mid-job-join test
+10. ✅ Task 5.1 — gate + mid-job-join test (mid-job join unit-tested; min_workers gate covered by live runs)
 11. Task 5.2 — `MULTI_MACHINE_SETUP.md`
 
 Submit each task for review before proceeding.
