@@ -1,19 +1,28 @@
 defmodule Mix.Tasks.Mr.Start do
   require Logger
   use Mix.Task
+  @requirements ["app.config"]
 
   @impl Mix.Task
   def run(args) do
     defaults = [
       workers: 4,
-      task: "word_count",
+      task: "distributed_grep",
       input: "sample-data/",
-      reducers: 4
+      reducers: 4,
+      distributed: false
     ]
 
     {parsed, _argv, _errors} =
       OptionParser.parse(args,
-        strict: [workers: :integer, reducers: :integer, task: :string, input: :string]
+        strict: [
+          workers: :integer,
+          reducers: :integer,
+          task: :string,
+          input: :string,
+          distributed: :boolean,
+          min_workers: :integer
+        ]
       )
 
     options = Keyword.merge(defaults, parsed)
@@ -22,6 +31,7 @@ defmodule Mix.Tasks.Mr.Start do
     {:ok, task_string} = Keyword.fetch(options, :task)
     {:ok, input} = Keyword.fetch(options, :input)
     {:ok, reducers} = Keyword.fetch(options, :reducers)
+    {:ok, is_distributed} = Keyword.fetch(options, :distributed)
 
     task_module =
       case task_string do
@@ -89,27 +99,34 @@ defmodule Mix.Tasks.Mr.Start do
         )
     end
 
-    # Start worker processes — keep port handles so we can kill workers on shutdown
-    ports =
-      Enum.map(1..workers, fn worker_num ->
-        worker_name = "worker#{worker_num}@127.0.0.1"
-        x = Enum.random(0..99) * 1.0
-        y = Enum.random(0..99) * 1.0
-        env_vars = "MR_START_MASTER=false MR_COORDS=#{x},#{y}"
+    {ports, expected} =
+      if options[:distributed] do
+        min = options[:min_workers] || Application.fetch_env!(:mr_master, :min_workers)
+        Logger.info("[master] Distributed mode - waiting for #{min} workers to register.")
 
-        command =
-          "sh -c '#{env_vars} elixir --name #{worker_name} --cookie #{cookie} -S mix run --no-compile --no-halt >> worker-#{worker_num}.log 2>&1'"
+        Logger.info(
+          "[master] Start workers on other machines with: mix mr.worker --name worker@host"
+        )
 
-        Port.open({:spawn, command}, [])
-      end)
+        {[], min}
+      else
+        {spawn_local_workers(workers, cookie), workers}
+      end
 
-    wait_for_workers(workers)
+    if is_distributed do
+      # 5 minute timeout for distributed mode -- should be enough to manually start workers
+      # on other machines for a small multi-machine test.
+      wait_for_workers(expected, 60_000 * 5)
+    else
+      # Use default for local mode
+      wait_for_workers(expected)
+    end
 
     # Verify workers actually connected
     worker_count = GenServer.call(MrMaster.Master, :get_workers) |> map_size()
 
-    if worker_count < workers do
-      raise "Only #{worker_count}/#{workers} workers connected"
+    if worker_count < expected do
+      raise "Only #{worker_count}/#{expected} workers connected"
     end
 
     # Wrap job execution in try/after so shutdown_workers always runs — even
@@ -143,6 +160,21 @@ defmodule Mix.Tasks.Mr.Start do
 
     Logger.info("Dashboard still available at http://localhost:4000 — Ctrl+C to exit")
     Process.sleep(:infinity)
+  end
+
+  defp spawn_local_workers(workers, cookie) do
+    # Start worker processes — keep port handles so we can kill workers on shutdown
+    Enum.map(1..workers, fn worker_num ->
+      worker_name = "worker#{worker_num}@127.0.0.1"
+      x = Enum.random(0..99) * 1.0
+      y = Enum.random(0..99) * 1.0
+      env_vars = "MR_START_MASTER=false MR_COORDS=#{x},#{y}"
+
+      command =
+        "sh -c '#{env_vars} elixir --name #{worker_name} --cookie #{cookie} -S mix run --no-compile --no-halt >> worker-#{worker_num}.log 2>&1'"
+
+      Port.open({:spawn, command}, [])
+    end)
   end
 
   # Gracefully shut down all worker nodes so their names are freed in epmd before

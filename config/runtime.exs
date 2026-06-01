@@ -30,7 +30,14 @@ case System.get_env("MR_COORDS") do
     :ok
 
   str ->
-    [x, y] = str |> String.split(",") |> Enum.map(&Float.parse/1)
+    [x, y] =
+      str
+      |> String.split(",")
+      |> Enum.map(fn s ->
+        {f, _rest} = Float.parse(s)
+        f
+      end)
+
     config :mr_worker, coords: {x, y}
 end
 

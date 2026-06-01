@@ -50,10 +50,18 @@ defmodule MrMaster.Master do
   def handle_call({:register, worker_info}, _from, state) do
     worker_node = worker_info.node
     # Add the new worker node to the registry
-    updated_state = put_in(state.workers[worker_node], worker_info)
+    state = put_in(state.workers[worker_node], worker_info)
+
+    state =
+      log_event(
+        state,
+        "[master] worker_registered | node=#{worker_node} coords=#{inspect(worker_info.coords)}"
+      )
+
     # Assign pending tasks since we now have a new worker
-    final_state = assign_pending_tasks(updated_state)
-    {:reply, :ok, final_state}
+    state = assign_pending_tasks(state)
+
+    {:reply, :ok, state}
   end
 
   @impl true
