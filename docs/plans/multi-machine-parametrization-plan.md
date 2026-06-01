@@ -368,7 +368,9 @@ Mirror the existing master test style/helpers. Also assert `wait_for_workers/2`'
 
 ---
 
-### Task 5.2: Write `MULTI_MACHINE_SETUP.md`
+### Task 5.2: Write `MULTI_MACHINE_SETUP.md` — ✅ Done
+
+**Status:** Done. Completed `docs/MULTI_MACHINE_SETUP.md` as the canonical guide: cluster-layout worked example (3 MacBooks, 4 workers, `MR_MIN_WORKERS=4`), prerequisites (same build/commit, same Elixir/OTP, input reachable per worker), network (`.local` mDNS + `ping` check + epmd/firewall), the cookie/master-node "must match" section, output/filesystem (defers to the existing 4.3 reference section below), launch order (workers-first, then master, with the real `mix mr.worker`/`mix mr.start --distributed` invocations), a verification section (log lines to watch for), and a troubleshooting table (cookie mismatch, `:ignored`/no-distribution, epmd name-in-use, firewall, under-min-workers, missing input path). Cross-links the condensed `config/multi_machine_example.md` rather than duplicating it.
 
 **What to build:** Step-by-step guide for a 3-MacBook run.
 
@@ -409,7 +411,7 @@ Mirror the existing master test style/helpers. Also assert `wait_for_workers/2`'
 8. ✅ Task 4.2 — master output collector + reduce push via RPC
 9. ✅ Task 4.3 — output/filesystem options doc
 10. ✅ Task 5.1 — gate + mid-job-join test (mid-job join unit-tested; min_workers gate covered by live runs)
-11. Task 5.2 — `MULTI_MACHINE_SETUP.md`
+11. ✅ Task 5.2 — `MULTI_MACHINE_SETUP.md`
 
 Submit each task for review before proceeding.
 
