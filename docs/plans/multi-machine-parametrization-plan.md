@@ -320,7 +320,9 @@ MrWorker.RPC.call(master_node, MrMaster.OutputCollector,
 
 ---
 
-### Task 4.3: Document output-collection and filesystem options
+### Task 4.3: Document output-collection and filesystem options — ✅ Done
+
+**Status:** Done. Created `docs/MULTI_MACHINE_SETUP.md` with the output/filesystem section: a data-location table (intermediate worker-local vs. final on master), the "temp must never be shared" rule and its fault-tolerance rationale, Option 1 (master-collects via RPC — default, with the paper-deviation note and when you'd outgrow it), Option 2 (shared NFS output dir — optional, more GFS-faithful), and a config-knobs summary (`MR_TEMP_DIR`/`MR_OUTPUT_DIR`). The remaining sections of that file (network, cookies, launch order, troubleshooting) are filled in by Task 5.2.
 
 **What to build:** A short guide covering where output lands and the (optional) alternatives.
 
@@ -401,7 +403,7 @@ Mirror the existing master test style/helpers. Also assert `wait_for_workers/2`'
 6. ✅ Task 3.2 — worker self-assigns random coords (worker half done early during 1.1; CLI flag pending in 3.1)
 7. ✅ Task 4.1 — configurable worker-local temp base dir
 8. ✅ Task 4.2 — master output collector + reduce push via RPC
-9. Task 4.3 — output/filesystem options doc
+9. ✅ Task 4.3 — output/filesystem options doc
 10. Task 5.1 — gate + mid-job-join test
 11. Task 5.2 — `MULTI_MACHINE_SETUP.md`
 
