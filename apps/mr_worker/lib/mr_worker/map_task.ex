@@ -34,7 +34,7 @@ defmodule MrWorker.MapTask do
         encoded = :erlang.term_to_binary(pairs)
         # Write to file
         base = Application.fetch_env!(:mr_worker, :temp_base_dir)
-        dirname = Path.join(base, worker_node_name)
+        dirname = Path.join(base, to_string(worker_node_name))
         filename = "map-#{task.id}-bucket-#{bucket}.bin"
         filepath = "#{dirname}/#{filename}"
         File.mkdir_p!(dirname)

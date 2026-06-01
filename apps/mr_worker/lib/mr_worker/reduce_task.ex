@@ -1,7 +1,5 @@
 defmodule MrWorker.ReduceTask do
-  def execute(task, task_module, registry, output_dir, throttle_multiplier) do
-    File.mkdir_p!(output_dir)
-
+  def execute(task, task_module, registry, throttle_multiplier) do
     file_contents =
       task.locations
       # List of decoded key/value pairs
@@ -31,9 +29,8 @@ defmodule MrWorker.ReduceTask do
       # Join into a single string
       |> Enum.join("")
 
-    file_path = "#{output_dir}/bucket-#{task.bucket}.txt"
-    File.write!(file_path, file_contents)
+    file_name = "bucket-#{task.bucket}.txt"
 
-    :ok
+    {file_name, file_contents}
   end
 end

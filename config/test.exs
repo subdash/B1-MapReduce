@@ -7,6 +7,8 @@ config :mr_dashboard, MrDashboardWeb.Endpoint,
   secret_key_base: "I53hkXPxcScsxcVWTvMk81zvEdUUwggkhxg+Hja/pUW+W7SqyVEsH5J2NPSv8ddz",
   server: false
 
+config :mr_worker, start_worker: false
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

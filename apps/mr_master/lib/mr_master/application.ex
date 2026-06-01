@@ -7,11 +7,15 @@ defmodule MrMaster.Application do
 
   @impl true
   def start(_type, _args) do
-    children = if Application.get_env(:mr_master, :start_master, true) do
-      [{MrMaster.Master, name: MrMaster.Master}]
-    else
-      []
-    end
+    children =
+      if Application.get_env(:mr_master, :start_master, true) do
+        [
+          {MrMaster.Master, name: MrMaster.Master},
+          {MrMaster.OutputCollector, name: MrMaster.OutputCollector}
+        ]
+      else
+        []
+      end
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options

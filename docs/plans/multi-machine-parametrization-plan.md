@@ -249,7 +249,9 @@ This moves the random-coord logic that currently lives in the spawner (`mr.start
 
 ## Phase 4: Output Collection & File Paths
 
-### Task 4.1: Make the map temp base dir configurable (worker-local)
+### Task 4.1: Make the map temp base dir configurable (worker-local) — ✅ Done
+
+**Status:** Done and verified end-to-end via a live distributed run. `map_task.ex:37` now uses `Path.join(base, to_string(worker_node_name))` with `base = Application.fetch_env!(:mr_worker, :temp_base_dir)` (default `"tmp"` from `runtime.exs`). **Bug caught in testing:** `Path.join` runs each segment through `IO.chardata_to_string/1`, which rejects the **atom** returned by `node()` (the old `"tmp/#{...}"` interpolation tolerated it) — fixed by wrapping in `to_string/1`. Static review missed it because it checked config wiring and path-flow but not the type `node()` supplies.
 
 **What to build:** Use the configured `temp_base_dir` instead of the hardcoded `"tmp"`, defaulting to `tmp` so single-machine runs are unchanged. Temp stays worker-local — it is fetched via RPC, never shared.
 
@@ -270,7 +272,14 @@ No change to the reduce fetch path: reduce workers keep pulling buckets via `MrW
 
 ---
 
-### Task 4.2: Collect reduce output at the master via RPC
+### Task 4.2: Collect reduce output at the master via RPC — ✅ Done
+
+**Status:** Done and verified end-to-end via a live distributed run (worker registers, job completes, `bucket-*.txt` land in the master's output dir). Implemented as designed: `MrMaster.OutputCollector` mirrors `FileServer` in reverse; `ReduceTask.execute` is now pure (returns `{file_name, file_contents}`, no side effects); `worker.ex` `run_reduce` pushes via throttled `RPC.call` **then** casts `{:reduce_done, …}` (output durable before completion is declared).
+
+**Deviations from the original sketch, caught in review/testing:**
+- **Collector must be hand-started in `start.ex`, not just declared in `application.ex`.** The master launch path (`mix mr.start`) uses `@requirements ["app.config"]` and hand-starts the `Master` GenServer directly — it never starts the `:mr_master` application, so the supervisor's children (incl. the collector) don't boot. Added an explicit `MrMaster.OutputCollector.start_link/1` after the `Master` block, mirroring how `Master` is launched.
+- **Output-dir reporting consistency:** `start.ex` now reads `output_base_dir` from config (bound once) for the completion summary instead of a hardcoded `"output/"`, so the reporter matches the collector's write target under `MR_OUTPUT_DIR`.
+- **Test hygiene (surfaced by `mix test`):** rewrote `reduce_task_test.exs` to assert the returned `{file_name, file_contents}` tuple (old test called the removed `/5` arity and read a file off disk). Added a `start_worker` flag (default `true`, `false` in `config/test.exs`) gating the live `MrWorker.Worker` so the test VM no longer boots a worker that raises on `Node.connect == :ignored` (no distribution in tests); `FileServer` stays unconditional since `file_server_test` relies on it.
 
 **What to build:** A master-side collector GenServer that receives finished output files from reduce workers and writes them into one directory on the master's disk — mirroring `MrWorker.FileServer` in the opposite direction (push instead of pull). Reduce workers stop writing output to a local path and instead send the bytes to the master.
 
@@ -390,8 +399,8 @@ Mirror the existing master test style/helpers. Also assert `wait_for_workers/2`'
 4. Task 2.2 — `--distributed` mode + `min_workers` gate
 5. Task 3.1 — `mix mr.worker` launch task (incl. `--coords` flag, the remaining half of 3.2)
 6. ✅ Task 3.2 — worker self-assigns random coords (worker half done early during 1.1; CLI flag pending in 3.1)
-7. Task 4.1 — configurable worker-local temp base dir
-8. Task 4.2 — master output collector + reduce push via RPC
+7. ✅ Task 4.1 — configurable worker-local temp base dir
+8. ✅ Task 4.2 — master output collector + reduce push via RPC
 9. Task 4.3 — output/filesystem options doc
 10. Task 5.1 — gate + mid-job-join test
 11. Task 5.2 — `MULTI_MACHINE_SETUP.md`

@@ -42,7 +42,17 @@ defmodule MrWorker.Worker do
 
     Task.start(fn ->
       try do
-        :ok = MrWorker.ReduceTask.execute(task, task_module, registry, "output/", multiplier)
+        {file_name, file_contents} =
+          MrWorker.ReduceTask.execute(task, task_module, registry, multiplier)
+
+        MrWorker.RPC.call(
+          master_node,
+          MrMaster.OutputCollector,
+          {:write_output, file_name, file_contents},
+          registry,
+          multiplier
+        )
+
         GenServer.cast({MrMaster.Master, master_node}, {:reduce_done, task.id})
       rescue
         e ->
