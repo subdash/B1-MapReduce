@@ -1,18 +1,7 @@
-# MrDashboard
+# mr_dashboard
 
-To start your Phoenix server:
+The **Phoenix LiveView dashboard** for Baby's First MapReduce. Part of the umbrella project — see the [top-level README](../../README.md).
 
-* Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+It renders a real-time view of a running job: a 2D map of worker nodes (by their fictional coordinates), each worker's current task and state, and overall job progress, pushed live over WebSocket as the master and workers emit events.
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
-
-Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
-
-## Learn more
-
-* Official website: https://www.phoenixframework.org/
-* Guides: https://hexdocs.pm/phoenix/overview.html
-* Docs: https://hexdocs.pm/phoenix
-* Forum: https://elixirforum.com/c/phoenix-forum
-* Source: https://github.com/phoenixframework/phoenix
+You normally don't start it directly — `mix mr.start` boots the endpoint alongside the master at [`localhost:4000`](http://localhost:4000). To run the dashboard on its own (e.g. for UI work), start the Phoenix endpoint with `mix phx.server` from the umbrella root. (There is no database — this app has no Ecto repo.)

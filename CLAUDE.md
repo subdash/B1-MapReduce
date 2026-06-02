@@ -12,13 +12,13 @@ This project is a learning exercise — the developer is building expertise in E
 
 ## Current Status
 
-Design and planning are complete. The project is ready to begin **Task 1** of the implementation plan.
+The core system is implemented and has run a word-count job end-to-end across multiple physical machines. Working: map/reduce execution, the master scheduler, fault tolerance (`{:nodedown}` requeue, straggler backup tasks, stale-completion handling), locality simulation, the multi-machine launch path (`mix mr.worker` + `mix mr.start --distributed`), output collection on the master, and the Phoenix LiveView dashboard. Active work is refinement — code cleanup, documentation, and hardening surfaced during real multi-machine runs.
 
 Key documents:
-- **Design spec:** `docs/superpowers/specs/2026-05-18-mapreduce-design.md` — full architecture, message protocol, data flow, fault tolerance design. Read this before answering any architecture questions.
-- **Implementation plan:** `docs/superpowers/plans/2026-05-18-mapreduce-implementation.md` — 17 tasks with review checkpoints. The developer implements each task and shares code for review before moving on.
-
-The developer is new to Elixir. Before starting Task 1, they want to review the "Elixir Concepts to Know Before Starting" section of the implementation plan and be quizzed on those concepts.
+- **Multi-machine setup:** `docs/MULTI_MACHINE_SETUP.md` — end-to-end guide for a multi-machine run (node names, cookies, networking, troubleshooting).
+- **Configuration:** `config/README.md` — the two run modes and the environment variables that drive them.
+- **Original design spec:** `docs/superpowers/specs/2026-05-18-mapreduce-design.md` — the as-designed architecture and message protocol. A historical artifact scoped to the single-machine "phase 1"; some details (e.g. output collection) have since evolved, so cross-check against the code.
+- **Multi-machine plan:** `docs/plans/multi-machine-parametrization-plan.md` — the task breakdown for the multi-machine parametrization work.
 
 ---
 
@@ -29,17 +29,17 @@ This project has two objectives, in priority order:
 1. **Learning** — Hands-on experience designing a distributed system from first principles, using Elixir and the Erlang/OTP distributed computing model. Key learning targets: Elixir/OTP, distributed Erlang nodes, fault tolerance via supervision, the MapReduce execution model, and the shuffle/RPC pattern.
 2. **Portfolio** — A talking piece for moving from application development into systems/distributed systems engineering. The implementation should be paper-faithful enough to discuss in a technical interview.
 
-The reference paper is `Mapreduce.pdf` (Dean & Ghemawat, Google, OSDI 2004). All design decisions trace back to it. When in doubt, follow the paper.
+The reference paper is *MapReduce: Simplified Data Processing on Large Clusters* (Dean & Ghemawat, Google, OSDI 2004). All design decisions trace back to it. When in doubt, follow the paper.
 
 ---
 
 ## What We Are Building
 
-A small but faithful implementation of the MapReduce programming model, running on a single machine as a cluster of distributed Erlang nodes. The initial task is **word frequency count** across 20 large text files (`sample-data/`).
+A small but faithful implementation of the MapReduce programming model, running as a cluster of distributed Erlang nodes — on a single machine for development, or across several physical machines over a LAN with no code changes. The reference task is **word frequency count** across 20 large text files (`sample-data/`).
 
-Later iterations will:
-- Span 3 physical MacBooks (zero code changes — just connect Erlang nodes over LAN)
-- Add a Phoenix LiveView dashboard for real-time visualisation
+Both of the original "later iterations" are now done:
+- Runs across multiple physical machines (connect Erlang nodes over the LAN; see `docs/MULTI_MACHINE_SETUP.md`)
+- A Phoenix LiveView dashboard provides real-time visualisation
 
 ---
 
@@ -57,11 +57,11 @@ Communication uses **Erlang distribution** — `GenServer.call({pid, node}, mess
 
 ### Execution Flow (following paper section 3.1)
 1. Master splits input files into M chunks and assigns each to an idle map worker node.
-2. Map worker reads its chunk, emits `{word, 1}` pairs, buckets them into R partitions using `hash(word) mod R`, and writes each partition to its **local disk** (`tmp/<worker-id>/bucket-<r>.bin`).
+2. Map worker reads its chunk, emits `{word, 1}` pairs, buckets them into R partitions using `hash(word) mod R`, and writes each partition to its **local disk** (`tmp/<worker-node-name>/map-<task-id>-bucket-<r>.bin`).
 3. Map worker notifies master with file locations on completion.
 4. Master assigns reduce tasks to idle reduce workers, passing them the locations of all bucket-R files across all map workers.
 5. Reduce worker fetches each bucket file via RPC from the relevant map worker node, sorts all pairs by key, and runs the reduce function (sum counts per word).
-6. Reduce worker writes final output to `output/`.
+6. Reduce worker sends its final output back to the master via RPC; the master's `OutputCollector` writes it to `output/` (one file per reduce bucket). This is a deliberate deviation from the paper (where reducers write straight to GFS) — it avoids needing a shared filesystem, at the cost of the master being an output funnel.
 7. Master declares the job complete when all reduce tasks finish.
 
 ### Intermediate Data Storage
@@ -77,9 +77,8 @@ Inter-node RPC calls are **throttled** based on Euclidean distance between the t
 - **RPC throttling**: wraps cross-node calls with a configurable artificial delay, either distance-based or manually set per worker.
 
 ### Observability
-**Phase 1** (current): Structured log lines emitted by master and workers on every significant event — task assignment, completion, node death, re-scheduling, locality decisions.
-
-**Phase 2** (future): Phoenix LiveView dashboard showing a 2D worker map, task state per worker, job progress, and interactive fault injection controls.
+- **Structured logs:** the master and workers emit structured log lines on every significant event — task assignment, completion, node death, re-scheduling, stale-completion drops, locality decisions.
+- **Phoenix LiveView dashboard (`mr_dashboard`):** a 2D worker map with per-worker task state and live job progress, served at `http://localhost:4000` (started automatically by `mix mr.start`).
 
 ---
 
@@ -97,18 +96,21 @@ Inter-node RPC calls are **throttled** based on Euclidean distance between the t
 
 ---
 
-## Project Structure (planned)
+## Project Structure
 
 ```
 babys-first-mapreduce/
 ├── apps/
-│   ├── mr_master/        # Master node — task scheduling, fault detection, locality
-│   ├── mr_worker/        # Worker node — map and reduce execution, file I/O, RPC handlers
-│   └── mr_protocol/      # Shared message types, serialisation, constants
-├── sample-data/          # 20 generated text files (~1M lines each, word frequency input)
+│   ├── mr_master/        # Master node — scheduling, fault detection, locality, output collection
+│   ├── mr_worker/        # Worker node — map/reduce execution, file I/O, RPC, FileServer
+│   ├── mr_protocol/      # Shared message types, the Task behaviour, distance/coords helpers
+│   └── mr_dashboard/     # Phoenix LiveView dashboard
+├── config/               # config.exs / runtime.exs + config docs (see config/README.md)
+├── docs/                 # design spec, plans, MULTI_MACHINE_SETUP.md
+├── scripts/              # generate_data.py (seeded sample-data generator)
+├── sample-data/          # 20 generated text files (gitignored)
 ├── tmp/                  # Intermediate files written by map workers (gitignored)
-├── output/               # Final reduce output (gitignored)
-├── Mapreduce.pdf         # Reference paper (Dean & Ghemawat, OSDI 2004)
+├── output/               # Final reduce output collected on the master (gitignored)
 └── CLAUDE.md             # This file
 ```
 
@@ -118,11 +120,11 @@ babys-first-mapreduce/
 
 - **Follow the paper first.** When a design decision is ambiguous, ask: what does section X of the paper say? Implement that.
 - **Learning over cleverness.** Prefer explicit, readable code over terse Elixir idioms until the concepts are solid.
-- **Phase discipline.** Phase 1 = single machine, logs, core MapReduce working correctly. Phase 2 = dashboard. Phase 3 = multi-machine. Don't mix phases.
+- **Phase discipline (historical).** The project was built in phases — (1) single-machine core + logs, (2) dashboard, (3) multi-machine — all now complete. New work should still keep unrelated concerns out of a single change.
 - **Fault tolerance is not optional.** The master must handle `{:nodedown, node}` correctly from day one. It is the core of the paper's contribution.
 
 ---
 
 ## Sample Data
 
-`sample-data/document_01.txt` through `document_20.txt`. Generated by `generate_data.py`. Each file has 700k–1.2M lines, 10 random words per line, drawn from a ~500-word vocabulary. Total ~1 GB.
+`sample-data/document_01.txt` through `document_20.txt`. Generated by `scripts/generate_data.py` (seeded, so every run produces an identical dataset). Each file has 700k–1.2M lines, 10 random words per line, drawn from a ~500-word vocabulary. Total ~1 GB.
