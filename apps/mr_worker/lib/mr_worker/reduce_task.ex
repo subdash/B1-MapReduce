@@ -29,8 +29,12 @@ defmodule MrWorker.ReduceTask do
       # Join into a single string
       |> Enum.join("")
 
+    dir = Application.fetch_env!(:mr_worker, :output_base_dir)
     file_name = "bucket-#{task.bucket}.txt"
+    file_path = Path.join(dir, file_name)
+    File.mkdir_p!(dir)
+    File.write!(file_path, file_contents)
 
-    {file_name, file_contents}
+    :ok
   end
 end

@@ -15,14 +15,14 @@ master_node = System.get_env("MR_MASTER_NODE", "master@127.0.0.1") |> String.to_
 config :mr_master,
   cookie: cookie,
   master_node: master_node,
-  min_workers: String.to_integer(System.get_env("MR_MIN_WORKERS", "4")),
-  output_base_dir: System.get_env("MR_OUTPUT_DIR", "output")
+  min_workers: String.to_integer(System.get_env("MR_MIN_WORKERS", "4"))
 
 # Worker-only
 config :mr_worker,
   cookie: cookie,
   master_node: master_node,
-  temp_base_dir: System.get_env("MR_TEMP_DIR", "tmp")
+  temp_base_dir: System.get_env("MR_TEMP_DIR", "tmp"),
+  output_base_dir: System.get_env("MR_WORKER_OUTPUT_DIR", "output")
 
 # Coords: explicit MR_COORDS overrides the worker's self-assignment of coordinates
 case System.get_env("MR_COORDS") do

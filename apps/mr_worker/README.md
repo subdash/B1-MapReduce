@@ -5,7 +5,7 @@ The **worker node** of Baby's First MapReduce. Part of the umbrella project — 
 A worker (`MrWorker.Worker`) registers with the master and runs whatever it's assigned:
 
 - `MrWorker.MapTask` — reads an input file, applies the task's `map/2` (and optional `combine/2`), and writes partitioned intermediate buckets to **local disk**.
-- `MrWorker.ReduceTask` — fetches the relevant buckets from map workers via RPC, applies `reduce/2`, and returns the result for the master to collect.
+- `MrWorker.ReduceTask` — fetches the relevant buckets from map workers via RPC, applies `reduce/2`, and writes the result (`bucket-<n>.txt`) to this worker's **local disk** under `MR_WORKER_OUTPUT_DIR`.
 - `MrWorker.FileServer` — serves this worker's local intermediate files to reduce workers on request (non-blocking, so concurrent fetches don't serialize).
 - `MrWorker.RPC` — the cross-node call wrapper that also simulates locality latency based on node coordinates.
 

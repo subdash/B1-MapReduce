@@ -20,7 +20,7 @@ A "word count" map task provides a simple example:
 - Combine: combine all of the counts, e.g. `[{"the", 1}, {"the", 1}]` become `[{"the", 2}]`
 - Reduce: same as combine, but across multiple files
 
-When a reduce task completes successfully, it sends its output back to the master, which collects it into a single output directory (one file per reduce bucket). However, if a map worker node dies during the reduce phase and before its intermediate files have been fully fetched, both the reduce tasks and map tasks must be re-queued, since the intermediate files required for the reduce task have become inaccessible.
+When a reduce task completes successfully, the reduce worker writes its output (one file per reduce bucket) to its own local disk. However, if a map worker node dies during the reduce phase and before its intermediate files have been fully fetched, both the reduce tasks and map tasks must be re-queued, since the intermediate files required for the reduce task have become inaccessible.
 
 Locality becomes important during the reduce phase since RPC calls between reduce workers and the nodes containing their intermediate files become more latent the further away they are in the network topology. The master takes into account the distance between nodes (this is simulated in this framework by assigning coordinates to nodes) when assigning reduce tasks by prioritizing reduce workers whose mean distance to the source map workers is the smallest.
 
@@ -28,7 +28,7 @@ Locality becomes important during the reduce phase since RPC calls between reduc
 
 ## Limitations, tradeoffs and improvements
 - **One map task per file**: A more efficient implementation would read byte ranges of a configurable size from files. This would reduce the chance of failure when processing large files and allow for much higher parallelism at the cost of the minor additional overhead of more map tasks to manage and more RPC calls during the reduce phase.
-- **No distributed filesystem**: Real MapReduce reads input from and writes output to a shared distributed filesystem (GFS). This implementation has none, so input files must be present on every worker machine at the same path, and final output is funneled back to and collected on the master rather than written in parallel. That keeps a multi-machine run to zero shared infrastructure, but the master becomes a bottleneck for output-heavy jobs. See [`docs/MULTI_MACHINE_SETUP.md`](docs/MULTI_MACHINE_SETUP.md).
+- **No distributed filesystem**: Real MapReduce reads input from and writes output to a shared distributed filesystem (GFS). This implementation has none, so input files must be present on every worker machine at the same path, and each reduce worker writes its final output to its own local disk. On a multi-machine run that leaves the output scattered across the worker machines (gather it with `scp`/`rsync`, or point `MR_WORKER_OUTPUT_DIR` at a shared mount); on a single-machine run it all lands in `output/`. That keeps a multi-machine run to zero shared infrastructure. See [`docs/MULTI_MACHINE_SETUP.md`](docs/MULTI_MACHINE_SETUP.md).
 - **Tasks are not configurable**: There is currently no mechanism to provide configuration for a task outside of the actual Elixir code that defines the task module. So for example, if I wanted the distributed grep job to search for a word other than "the", I would need to edit the Elixir code for that task. This creates an undesirable operational burden.
 - **Node distance is simulated**: A real implementation would assign reduce tasks based on how latent the RPC calls are rather than simulating distance between nodes via bogus coordinates.
 
@@ -71,7 +71,7 @@ This:
 3. Assigns map tasks to workers (one per file)
 4. Emits intermediate `{word, 1}` pairs bucketed by word hash
 5. Assigns reduce tasks to aggregate counts per word
-6. Collects final results on the master in `output/`
+6. Each reduce worker writes its final results to local disk; on a single-machine run they all land in `output/`
 
 You can customize the run with options:
 

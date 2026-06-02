@@ -42,4 +42,4 @@ Workers connect to the master by name and register themselves (the master never 
 
 ## The two values that must match everywhere
 
-`MR_COOKIE` and `MR_MASTER_NODE` must be identical on every node. If either differs, `Node.connect` fails silently and workers never register — the most common cause of a cluster that "starts but does nothing." Everything else (`MR_COORDS`, `MR_TEMP_DIR`, `MR_MIN_WORKERS`, `MR_OUTPUT_DIR`) is per-process and may differ.
+`MR_COOKIE` and `MR_MASTER_NODE` must be identical on every node. If either differs, `Node.connect` fails silently and workers never register — the most common cause of a cluster that "starts but does nothing." Everything else (`MR_COORDS`, `MR_TEMP_DIR`, `MR_MIN_WORKERS`, `MR_WORKER_OUTPUT_DIR`) is per-process and may differ.

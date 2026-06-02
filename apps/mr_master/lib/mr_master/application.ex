@@ -10,8 +10,7 @@ defmodule MrMaster.Application do
     children =
       if Application.get_env(:mr_master, :start_master, true) do
         [
-          {MrMaster.Master, name: MrMaster.Master},
-          {MrMaster.OutputCollector, name: MrMaster.OutputCollector}
+          {MrMaster.Master, name: MrMaster.Master}
         ]
       else
         []

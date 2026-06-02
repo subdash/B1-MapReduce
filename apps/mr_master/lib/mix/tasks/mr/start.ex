@@ -58,7 +58,6 @@ defmodule Mix.Tasks.Mr.Start do
     # Start Erlang distribution in this process as the master node
     master_node = Application.fetch_env!(:mr_master, :master_node)
     cookie = Application.fetch_env!(:mr_master, :cookie)
-    output_dir = Application.fetch_env!(:mr_master, :output_base_dir)
 
     case :net_kernel.start([master_node, :longnames]) do
       {:ok, _} ->
@@ -77,14 +76,6 @@ defmodule Mix.Tasks.Mr.Start do
 
       {:error, reason} ->
         raise "Failed to start Master GenServer: #{inspect(reason)}"
-    end
-
-    case MrMaster.OutputCollector.start_link([]) do
-      {:ok, pid} ->
-        Logger.info("[master] OutputCollector started at #{inspect(pid)}")
-
-      {:error, reason} ->
-        raise "Failed to start OutputCollector: #{inspect(reason)}"
     end
 
     # Start the LiveView dashboard alongside the master in the same BEAM VM.
@@ -154,15 +145,8 @@ defmodule Mix.Tasks.Mr.Start do
       duration_ms = end_time - start_time
       duration_sec = duration_ms / 1000
 
-      output_files =
-        case File.ls(output_dir) do
-          {:ok, files} -> Enum.join(files, ", ")
-          _ -> "(no output directory found)"
-        end
-
       Logger.info("=== MapReduce Job Complete ===")
       Logger.info("Duration: #{Float.round(duration_sec, 1)} seconds")
-      Logger.info("Results written to #{output_dir}/: #{output_files}")
     after
       shutdown_workers(ports)
     end

@@ -4,8 +4,10 @@ defmodule ReduceTaskTest do
   use ExUnit.Case
 
   @tag :tmp_dir
-  test "ReduceTask.execute reads map output, reduces it, and returns the file name and contents",
+  test "ReduceTask.execute reads map output, reduces it, and writes contents to output dir",
        %{tmp_dir: tmp_dir} do
+    Application.put_env(:mr_worker, :output_base_dir, tmp_dir)
+
     map_output1 =
       :erlang.term_to_binary([
         {"pikachu", 3},
@@ -37,10 +39,8 @@ defmodule ReduceTaskTest do
 
     registry = %{node() => %MrProtocol.WorkerInfo{node: node(), coords: {0.0, 0.0}}}
 
-    {file_name, file_contents} =
-      MrWorker.ReduceTask.execute(task, MrWorker.Tasks.WordCount, registry, 1.0)
-
-    assert file_name == "bucket-1.txt"
+    :ok = MrWorker.ReduceTask.execute(task, MrWorker.Tasks.WordCount, registry, 1.0)
+    file_contents = File.read!(Path.join(tmp_dir, "bucket-#{task.bucket}.txt"))
     assert file_contents == "charizard\t3\ncharmeleon\t5\ndragonite\t1\npikachu\t4\nraichu\t3\n"
   end
 end

@@ -12,7 +12,7 @@ This project is a learning exercise — the developer is building expertise in E
 
 ## Current Status
 
-The core system is implemented and has run a word-count job end-to-end across multiple physical machines. Working: map/reduce execution, the master scheduler, fault tolerance (`{:nodedown}` requeue, straggler backup tasks, stale-completion handling), locality simulation, the multi-machine launch path (`mix mr.worker` + `mix mr.start --distributed`), output collection on the master, and the Phoenix LiveView dashboard. Active work is refinement — code cleanup, documentation, and hardening surfaced during real multi-machine runs.
+The core system is implemented and has run a word-count job end-to-end across multiple physical machines. Working: map/reduce execution, the master scheduler, fault tolerance (`{:nodedown}` requeue, straggler backup tasks, stale-completion handling), locality simulation, the multi-machine launch path (`mix mr.worker` + `mix mr.start --distributed`), reduce workers writing final output to their own local disk, and the Phoenix LiveView dashboard. Active work is refinement — code cleanup, documentation, and hardening surfaced during real multi-machine runs.
 
 Key documents:
 - **Multi-machine setup:** `docs/MULTI_MACHINE_SETUP.md` — end-to-end guide for a multi-machine run (node names, cookies, networking, troubleshooting).
@@ -61,7 +61,7 @@ Communication uses **Erlang distribution** — `GenServer.call({pid, node}, mess
 3. Map worker notifies master with file locations on completion.
 4. Master assigns reduce tasks to idle reduce workers, passing them the locations of all bucket-R files across all map workers.
 5. Reduce worker fetches each bucket file via RPC from the relevant map worker node, sorts all pairs by key, and runs the reduce function (sum counts per word).
-6. Reduce worker sends its final output back to the master via RPC; the master's `OutputCollector` writes it to `output/` (one file per reduce bucket). This is a deliberate deviation from the paper (where reducers write straight to GFS) — it avoids needing a shared filesystem, at the cost of the master being an output funnel.
+6. Reduce worker writes its final output to its **own local disk** (`<MR_WORKER_OUTPUT_DIR>/bucket-<r>.txt`, default `output/`), one file per reduce bucket. The paper has reducers write to GFS (a globally readable shared filesystem); we have no shared FS, so on a multi-machine run the output ends up scattered across the reduce workers' machines — collect it manually (e.g. `scp`/`rsync`), or point `MR_WORKER_OUTPUT_DIR` at a shared mount to land it all in one place. On a single-machine run the local workers share the master's working directory, so everything appears in `output/` automatically.
 7. Master declares the job complete when all reduce tasks finish.
 
 ### Intermediate Data Storage
@@ -101,7 +101,7 @@ Inter-node RPC calls are **throttled** based on Euclidean distance between the t
 ```
 babys-first-mapreduce/
 ├── apps/
-│   ├── mr_master/        # Master node — scheduling, fault detection, locality, output collection
+│   ├── mr_master/        # Master node — scheduling, fault detection, locality
 │   ├── mr_worker/        # Worker node — map/reduce execution, file I/O, RPC, FileServer
 │   ├── mr_protocol/      # Shared message types, the Task behaviour, distance/coords helpers
 │   └── mr_dashboard/     # Phoenix LiveView dashboard
@@ -110,7 +110,7 @@ babys-first-mapreduce/
 ├── scripts/              # generate_data.py (seeded sample-data generator)
 ├── sample-data/          # 20 generated text files (gitignored)
 ├── tmp/                  # Intermediate files written by map workers (gitignored)
-├── output/               # Final reduce output collected on the master (gitignored)
+├── output/               # Final reduce output, written by each reduce worker to its local disk; on a single-machine run it lands here (gitignored)
 └── CLAUDE.md             # This file
 ```
 

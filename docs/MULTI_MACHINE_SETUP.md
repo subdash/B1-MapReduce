@@ -71,10 +71,12 @@ These are the two values that, if wrong, produce a cluster that **silently never
 
 ## 4. Output and filesystem
 
-Use the default — **master-collects via RPC** (no shared filesystem). Final output lands
-in `MR_OUTPUT_DIR` (default `output/`) **on the master**. See
-[Where data lives](#where-data-lives) below for the full model and the optional shared-FS
-alternative. Intermediate data always stays local to each worker — never share it.
+Use the default — **each reduce worker writes its output to its own local disk** (no
+shared filesystem). Final output lands in `MR_WORKER_OUTPUT_DIR` (default `output/`) **on
+each reduce worker's machine**, so on a multi-machine run it's scattered across the
+workers. See [Where data lives](#where-data-lives) below for the full model and the
+optional shared-mount alternative. Intermediate data always stays local to each worker —
+never share it.
 
 ## 5. Launch
 
@@ -110,10 +112,12 @@ Watch the master log for:
 - `[master] worker_registered | node=worker1@macbook2.local …` — one per worker; the job
   starts once `MR_MIN_WORKERS` have registered.
 - `[master] task_assigned | type=map …`, then `type=reduce …` as work flows.
-- `=== MapReduce Job Complete ===` with a duration and the output file list.
+- `=== MapReduce Job Complete ===` with a duration.
 
-Final results are in `MR_OUTPUT_DIR` (default `output/`) **on macbook1** — `bucket-0.txt`,
-`bucket-1.txt`, … one per reducer.
+Final results are written to `MR_WORKER_OUTPUT_DIR` (default `output/`) **on each reduce
+worker's machine** (macbook2/macbook3 here), as `bucket-0.txt`, `bucket-1.txt`, … one per
+reducer — so they're spread across the workers. Gather them with `scp`/`rsync`, or point
+`MR_WORKER_OUTPUT_DIR` at a shared mount to collect them in one place.
 
 ## 7. Troubleshooting
 
@@ -168,48 +172,47 @@ Pointing `MR_TEMP_DIR` at a **fast local path** (e.g. a local SSD scratch dir, o
 
 ---
 
-## Final output: how it gets collected
+## Final output: where it lands
 
-### Option 1 — Master collects via RPC (default, recommended)
+### Default — each reduce worker writes to its own local disk
 
-This is what the implementation does today (Task 4.2). Reduce workers do **not** write
-output to their own disk. Instead:
+Reduce workers write their final output straight to **their own local disk**:
 
-1. `ReduceTask.execute` computes the result and returns `{filename, binary}` — a pure
-   function with no filesystem or master dependency.
-2. The worker pushes the bytes to the master over the throttled RPC path:
-   `MrWorker.RPC.call(master_node, MrMaster.OutputCollector, {:write_output, filename, binary}, …)`.
-3. `MrMaster.OutputCollector` (a GenServer on the master) writes the file into one
-   directory on the master's disk.
+1. `ReduceTask.execute` fetches the intermediate buckets, runs `reduce/2`, and writes the
+   result to `<MR_WORKER_OUTPUT_DIR>/bucket-<n>.txt` on the machine it's running on.
+2. It then casts `{:reduce_done, …}` to the master so completion can be tracked — the
+   master never sees the output bytes.
 
-- Configured by `MR_OUTPUT_DIR` (env) → `:mr_master, :output_base_dir`, **default `output`**.
+- Configured by `MR_WORKER_OUTPUT_DIR` (env) → `:mr_worker, :output_base_dir`, **default `output`**.
 - Filenames are deterministic per reduce bucket (`bucket-<n>.txt`), so a re-run after a
   worker failure overwrites rather than duplicates.
 
-**Why this is the default:** zero filesystem setup. You can run across three machines
-with nothing but the LAN — no NFS, no mounts, no permissions. All results land in
-`output/` on the master, ready to inspect.
+**What this means on a multi-machine run:** the output is **scattered** — each reduce
+worker leaves its `bucket-<n>.txt` on its own machine. There's no shared filesystem, so
+to assemble the full result set you either gather the files yourself (`scp`/`rsync` from
+each worker) or use the shared-mount option below. On a **single-machine** run the local
+workers share the master's working directory, so everything simply appears in `output/`
+with no extra step.
 
-**Deliberate paper deviation:** the original MapReduce has reduce workers write final
-output directly to the distributed filesystem (GFS); the master is only a coordinator,
-never a data conduit. Here the master *is* the funnel for final output. That's a
-conscious trade for simplicity on a small cluster. You'd outgrow it when final output
-gets large or reducers numerous enough that serializing every write through one master
-GenServer becomes the bottleneck — at which point Option 2 is the escape hatch.
+**Relation to the paper:** the original MapReduce has reduce workers write final output to
+GFS — a *globally readable* distributed filesystem — so "written locally by the reducer"
+and "available everywhere" are the same thing. We write locally but have no shared FS, so
+we get the reducer-writes-its-own-output half without the global-visibility half. The
+shared-mount option restores the second half.
 
-### Option 2 — Shared output directory (optional, more GFS-faithful)
+### Shared output directory (optional, GFS-faithful)
 
-If you'd rather mirror the paper more closely and remove the master-as-funnel
-bottleneck, point `output_base_dir` at a shared mount (NFS, `/Volumes/shared`, etc.)
-and have reducers write there directly instead of pushing to the master.
+To collect all output in one place — and get closer to the paper's GFS model — point
+`MR_WORKER_OUTPUT_DIR` at a **shared mount** (NFS, `/Volumes/shared`, etc.) that every
+worker machine has mounted at the same path. Reducers then write their buckets straight
+into the shared directory; no code change, just the env var.
 
-- **Pro:** closer to the paper; no single-process write bottleneck; scales further.
+- **Pro:** all `bucket-<n>.txt` land in one directory; closest to the paper.
 - **Con:** real setup cost — every machine needs the mount, with consistent paths and
   write permissions; you inherit NFS's failure and consistency quirks.
 
-This is **not wired up by default** — it's the documented alternative for when the
-simple model stops being enough. (Note: this only concerns *final output*. Intermediate
-data stays local regardless — see above.)
+(Note: this only concerns *final output*. Intermediate map data stays node-local
+regardless — see above.)
 
 ---
 
@@ -218,7 +221,9 @@ data stays local regardless — see above.)
 | Concern | Env var | Application key | Default | Shared FS? |
 |---|---|---|---|---|
 | Intermediate (map) temp dir | `MR_TEMP_DIR` | `:mr_worker, :temp_base_dir` | `tmp` | **No** |
-| Final output dir | `MR_OUTPUT_DIR` | `:mr_master, :output_base_dir` | `output` | Only in Option 2 |
+| Final output dir | `MR_WORKER_OUTPUT_DIR` | `:mr_worker, :output_base_dir` | `output` | Only if pointed at a shared mount |
 
-For a typical multi-machine run, leave both at their defaults: temp lands locally on
-each worker, and output lands in `output/` on the master.
+For a typical multi-machine run, leave both at their defaults: temp and output both land
+locally on each worker (output as `bucket-<n>.txt` under `output/`). Gather the output
+afterward with `scp`/`rsync`, or set `MR_WORKER_OUTPUT_DIR` to a shared mount to
+centralize it.
