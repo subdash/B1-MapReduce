@@ -7,3 +7,4 @@ deps/
 .claude/
 sample-data/
 *.log
+scripts/__pycache__/

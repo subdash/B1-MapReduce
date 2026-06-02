@@ -72,6 +72,11 @@ WORDS = [
 
 CHUNK = 50_000
 
+# Seed the global RNG so every machine generates byte-identical sample-data.
+# Override with: python3 scripts/generate_data.py <seed>
+SEED = int(sys.argv[1]) if len(sys.argv) > 1 else 42
+random.seed(SEED)
+
 def generate_file(path, num_lines):
     start = time.time()
     with open(path, "wb") as f:

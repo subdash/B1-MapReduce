@@ -25,7 +25,7 @@ defmodule MrWorker.Worker do
     Task.start(fn ->
       try do
         {:ok, locations} = MrWorker.MapTask.execute(task, task_module, node())
-        GenServer.cast({MrMaster.Master, master_node}, {:map_done, task.id, locations})
+        GenServer.cast({MrMaster.Master, master_node}, {:map_done, task.id, node(), locations})
       rescue
         e ->
           Logger.error("[worker] map_task crashed | id=#{task.id} error=#{inspect(e)}")
@@ -53,7 +53,7 @@ defmodule MrWorker.Worker do
           multiplier
         )
 
-        GenServer.cast({MrMaster.Master, master_node}, {:reduce_done, task.id})
+        GenServer.cast({MrMaster.Master, master_node}, {:reduce_done, task.id, node()})
       rescue
         e ->
           Logger.error("[worker] reduce_task crashed | id=#{task.id} error=#{inspect(e)}")

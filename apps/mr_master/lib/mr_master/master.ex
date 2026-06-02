@@ -110,108 +110,126 @@ defmodule MrMaster.Master do
   end
 
   @impl true
-  def handle_cast({:map_done, task_id, bucket_locations}, state) do
-    # If primary task is completed already, that means a backup map task
-    # just sent its :map_done message. We must mark the backup task as completed.
-    if state.map_tasks[task_id].status == :completed do
-      state =
-        case Map.fetch(state.backup_tasks, {:map, task_id}) do
-          {:ok, backup_node} ->
-            # Find worker assigned to backup task
-            %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
+  def handle_cast({:map_done, task_id, sender_node, bucket_locations}, state) do
+    is_not_stale =
+      state.map_tasks[task_id].assigned_to == sender_node or
+        state.backup_tasks[{:map, task_id}] == sender_node
 
-            # Mark worker as idle in worker registry
-            state =
-              put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
-                backup_worker
-                | status: :idle
-              })
+    if is_not_stale do
+      # If primary task is completed already, that means a backup map task
+      # just sent its :map_done message. We must mark the backup task as completed.
+      if state.map_tasks[task_id].status == :completed do
+        state =
+          case Map.fetch(state.backup_tasks, {:map, task_id}) do
+            {:ok, backup_node} ->
+              # Find worker assigned to backup task
+              %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
 
-            # Remove the task from backup_tasks
-            state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:map, task_id}))
-            assign_pending_tasks(state)
+              # Mark worker as idle in worker registry
+              state =
+                put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
+                  backup_worker
+                  | status: :idle
+                })
 
-          :error ->
-            state
-        end
+              # Remove the task from backup_tasks
+              state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:map, task_id}))
+              assign_pending_tasks(state)
 
-      {:noreply, state}
+            :error ->
+              state
+          end
+
+        {:noreply, state}
+      else
+        # The primary (rather than backup) map task completed.
+        # Mark the task as completed in the map tasks dictionary.
+        %MrProtocol.MapTask{} = completed_task = state.map_tasks[task_id]
+        completed_task = %MrProtocol.MapTask{completed_task | status: :completed}
+        # Mark worker as idle
+        %MrProtocol.WorkerInfo{} = idle_worker = state.workers[completed_task.assigned_to]
+
+        idle_worker = %MrProtocol.WorkerInfo{
+          idle_worker
+          | status: :idle
+        }
+
+        # Update state with completed task, idle worker and bucket locations
+        state = put_in(state.map_tasks[task_id], completed_task)
+        state = put_in(state.intermediate_locations[task_id], bucket_locations)
+        state = put_in(state.workers[completed_task.assigned_to], idle_worker)
+        # Assign any pending map tasks
+        state = assign_pending_tasks(state)
+        state = maybe_start_reduce(state)
+
+        {:noreply, state}
+      end
     else
-      # The primary (rather than backup) map task completed.
-      # Mark the task as completed in the map tasks dictionary.
-      %MrProtocol.MapTask{} = completed_task = state.map_tasks[task_id]
-      completed_task = %MrProtocol.MapTask{completed_task | status: :completed}
-      # Mark worker as idle
-      %MrProtocol.WorkerInfo{} = idle_worker = state.workers[completed_task.assigned_to]
-
-      idle_worker = %MrProtocol.WorkerInfo{
-        idle_worker
-        | status: :idle
-      }
-
-      # Update state with completed task, idle worker and bucket locations
-      state = put_in(state.map_tasks[task_id], completed_task)
-      state = put_in(state.intermediate_locations[task_id], bucket_locations)
-      state = put_in(state.workers[completed_task.assigned_to], idle_worker)
-      # Assign any pending map tasks
-      state = assign_pending_tasks(state)
-      state = maybe_start_reduce(state)
-
+      Logger.debug("[master] stale map_done ignored | id=#{task_id} from=#{sender_node}")
       {:noreply, state}
     end
   end
 
   @impl true
-  def handle_cast({:reduce_done, task_id}, state) do
-    if state.reduce_tasks[task_id].status == :completed do
-      state =
-        case Map.fetch(state.backup_tasks, {:reduce, task_id}) do
-          {:ok, backup_node} ->
-            %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
+  def handle_cast({:reduce_done, task_id, sender_node}, state) do
+    is_not_stale =
+      state.reduce_tasks[task_id].assigned_to == sender_node or
+        state.backup_tasks[{:reduce, task_id}] == sender_node
 
-            state =
-              put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
-                backup_worker
-                | status: :idle
-              })
-
-            state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:reduce, task_id}))
-            assign_pending_tasks(state)
-
-          :error ->
-            state
-        end
-
-      {:noreply, state}
-    else
-      %MrProtocol.ReduceTask{} = task = state.reduce_tasks[task_id]
-      %MrProtocol.WorkerInfo{} = worker = state.workers[task.assigned_to]
-      # Mark task as completed
-      state =
-        put_in(state.reduce_tasks[task_id], %MrProtocol.ReduceTask{task | status: :completed})
-
-      state = put_in(state.workers[worker.node], %MrProtocol.WorkerInfo{worker | status: :idle})
-      state = assign_pending_tasks(state)
-
-      reduce_phase_complete =
-        Enum.all?(Map.values(state.reduce_tasks), fn %MrProtocol.ReduceTask{} = reduce_task ->
-          reduce_task.status == :completed
-        end)
-
-      if reduce_phase_complete do
-        state = %{state | phase: :done}
-        duration = System.monotonic_time(:millisecond) - state.start_time
-
+    if is_not_stale do
+      if state.reduce_tasks[task_id].status == :completed do
         state =
-          log_event(
-            state,
-            "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
-          )
+          case Map.fetch(state.backup_tasks, {:reduce, task_id}) do
+            {:ok, backup_node} ->
+              %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
+
+              state =
+                put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
+                  backup_worker
+                  | status: :idle
+                })
+
+              state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:reduce, task_id}))
+              assign_pending_tasks(state)
+
+            :error ->
+              state
+          end
 
         {:noreply, state}
       else
-        {:noreply, state}
+        %MrProtocol.ReduceTask{} = task = state.reduce_tasks[task_id]
+        %MrProtocol.WorkerInfo{} = worker = state.workers[task.assigned_to]
+        # Mark task as completed
+        state =
+          put_in(state.reduce_tasks[task_id], %MrProtocol.ReduceTask{task | status: :completed})
+
+        state = put_in(state.workers[worker.node], %MrProtocol.WorkerInfo{worker | status: :idle})
+        state = assign_pending_tasks(state)
+
+        reduce_phase_complete =
+          Enum.all?(Map.values(state.reduce_tasks), fn %MrProtocol.ReduceTask{} = reduce_task ->
+            reduce_task.status == :completed
+          end)
+
+        if reduce_phase_complete do
+          state = %{state | phase: :done}
+          duration = System.monotonic_time(:millisecond) - state.start_time
+
+          state =
+            log_event(
+              state,
+              "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
+            )
+
+          {:noreply, state}
+        else
+          {:noreply, state}
+        end
       end
+    else
+      Logger.debug("[master] stale reduce_done ignored | id=#{task_id} from=#{sender_node}")
+      {:noreply, state}
     end
   end
 

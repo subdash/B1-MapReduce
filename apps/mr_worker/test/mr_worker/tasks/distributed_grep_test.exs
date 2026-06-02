@@ -77,6 +77,9 @@ defmodule MrWorker.Tasks.DistributedGrepTest do
   end
 
   test "implements MrProtocol.Task behaviour" do
+    # function_exported?/3 doesn't load the module; ensure it's loaded first so the
+    # assertion doesn't depend on test order (otherwise it's seed-dependent flaky).
+    Code.ensure_loaded!(MrWorker.Tasks.DistributedGrep)
     assert :erlang.function_exported(MrWorker.Tasks.DistributedGrep, :map, 2)
     assert :erlang.function_exported(MrWorker.Tasks.DistributedGrep, :reduce, 2)
   end

@@ -45,7 +45,7 @@ defmodule MasterTest do
     worker_node = task.assigned_to
     locs = bucket_locations(worker_node, state.num_reducers)
 
-    GenServer.cast({MrMaster.Master, node()}, {:map_done, task_id, locs})
+    GenServer.cast({MrMaster.Master, node()}, {:map_done, task_id, worker_node, locs})
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
     assert state.map_tasks[task_id].status == :completed
 
@@ -75,13 +75,13 @@ defmodule MasterTest do
 
     GenServer.cast(
       {MrMaster.Master, node()},
-      {:map_done, task_id, bucket_locations(task.assigned_to, state.num_reducers)}
+      {:map_done, task_id, task.assigned_to, bucket_locations(task.assigned_to, state.num_reducers)}
     )
 
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
     assert state.map_tasks[task_id].status == :completed
-    [{reduce_id, _}] = Map.to_list(state.reduce_tasks)
-    GenServer.cast({MrMaster.Master, node()}, {:reduce_done, reduce_id})
+    [{reduce_id, reduce_task}] = Map.to_list(state.reduce_tasks)
+    GenServer.cast({MrMaster.Master, node()}, {:reduce_done, reduce_id, reduce_task.assigned_to})
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
     assert state.phase == :done
   end
@@ -104,7 +104,7 @@ defmodule MasterTest do
 
     GenServer.cast(
       {MrMaster.Master, node()},
-      {:map_done, task_id, bucket_locations(task.assigned_to, state.num_reducers)}
+      {:map_done, task_id, task.assigned_to, bucket_locations(task.assigned_to, state.num_reducers)}
     )
 
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
@@ -112,8 +112,8 @@ defmodule MasterTest do
     assert state.phase == :reducing
     assert map_size(state.reduce_tasks) == 2
 
-    {reduce_id, _} = Enum.find(state.reduce_tasks, fn {_id, t} -> t.status == :in_progress end)
-    GenServer.cast({MrMaster.Master, node()}, {:reduce_done, reduce_id})
+    {reduce_id, reduce_task} = Enum.find(state.reduce_tasks, fn {_id, t} -> t.status == :in_progress end)
+    GenServer.cast({MrMaster.Master, node()}, {:reduce_done, reduce_id, reduce_task.assigned_to})
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
 
     assert state.phase == :reducing
@@ -144,7 +144,7 @@ defmodule MasterTest do
     # Complete map task for worker 1
     GenServer.cast(
       {MrMaster.Master, node()},
-      {:map_done, w1_task.id, bucket_locations(w1_task.assigned_to, state.num_reducers)}
+      {:map_done, w1_task.id, w1_task.assigned_to, bucket_locations(w1_task.assigned_to, state.num_reducers)}
     )
 
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
@@ -198,7 +198,7 @@ defmodule MasterTest do
         end)
 
       locs = bucket_locations(w2.node, state.num_reducers)
-      GenServer.cast({MrMaster.Master, node()}, {:map_done, w2_task_id, locs})
+      GenServer.cast({MrMaster.Master, node()}, {:map_done, w2_task_id, w2.node, locs})
     end
 
     # At this point, >80% of map tasks have been completed, so we assign a backup
@@ -210,10 +210,10 @@ defmodule MasterTest do
     assert state.backup_tasks[{:map, w1_task_id}] == w2.node
     # Mark the task as complete
     locs = bucket_locations(w1.node, state.num_reducers)
-    GenServer.cast({MrMaster.Master, node()}, {:map_done, w1_task_id, locs})
+    GenServer.cast({MrMaster.Master, node()}, {:map_done, w1_task_id, w1.node, locs})
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
     locs = bucket_locations(w2.node, state.num_reducers)
-    GenServer.cast({MrMaster.Master, node()}, {:map_done, w1_task_id, locs})
+    GenServer.cast({MrMaster.Master, node()}, {:map_done, w1_task_id, w2.node, locs})
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
     assert state.phase == :reducing
     # Find reduce task assigned to worker 1
@@ -229,7 +229,7 @@ defmodule MasterTest do
           t.assigned_to == :worker2@localhost and t.status == :in_progress
         end)
 
-      GenServer.cast({MrMaster.Master, node()}, {:reduce_done, w2_task_id})
+      GenServer.cast({MrMaster.Master, node()}, {:reduce_done, w2_task_id, w2.node})
     end
 
     Process.send(GenServer.whereis(MrMaster.Master), :check_stragglers, [])
@@ -257,7 +257,7 @@ defmodule MasterTest do
 
     Enum.each(state.map_tasks, fn {task_id, map_task = %MrProtocol.MapTask{}} ->
       locs = bucket_locations(map_task.assigned_to, state.num_reducers)
-      GenServer.cast({MrMaster.Master, node()}, {:map_done, task_id, locs})
+      GenServer.cast({MrMaster.Master, node()}, {:map_done, task_id, map_task.assigned_to, locs})
     end)
 
     state = GenServer.call({MrMaster.Master, node()}, :get_state)
