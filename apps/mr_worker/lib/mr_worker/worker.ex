@@ -3,6 +3,8 @@ defmodule MrWorker.Worker do
   require Logger
   use GenServer
 
+  @max_attempts 100
+
   def init(opts) do
     master_node = Keyword.fetch!(opts, :master_node)
     coords = Keyword.fetch!(opts, :coords)
@@ -68,35 +70,34 @@ defmodule MrWorker.Worker do
     {:noreply, %{state | throttle_multiplier: multiplier}}
   end
 
-  def handle_info(:connect_to_master, state) do
-    max_attempts = 100
+  def handle_info(:connect_to_master, %{connection_attempt: attempt} = state)
+      when attempt >= @max_attempts do
+    Logger.error(
+      "[worker] giving up: master unreachable after #{@max_attempts} attempts | " <>
+        "node=#{state.master_node}"
+    )
 
-    if state.connection_attempt >= max_attempts do
-      Logger.error(
-        "[worker] giving up: master unreachable after #{max_attempts} attempts | " <>
-          "node=#{state.master_node}"
-      )
+    System.stop(1)
+    {:noreply, state}
+  end
 
-      System.stop(1)
-      {:noreply, state}
-    else
-      case try_connect(state.master_node, state.coords) do
-        :ok ->
-          Logger.info("[worker] registered with master | node=#{state.master_node}")
-          {:noreply, state}
+  def handle_info(:connect_to_master, %{connection_attempt: attempt} = state) do
+    case try_connect(state.master_node, state.coords) do
+      :ok ->
+        Logger.info("[worker] registered with master | node=#{state.master_node}")
+        {:noreply, state}
 
-        :retry ->
-          # Exponential backoff capped at 5 seconds
-          backoff_ms = min(100 * Integer.pow(2, state.connection_attempt), 5000)
+      :retry ->
+        # Exponential backoff capped at 5 seconds
+        backoff_ms = min(100 * Integer.pow(2, attempt), 5000)
 
-          Logger.debug(
-            "[worker] register attempt #{state.connection_attempt + 1} failed, " <>
-              "retry in #{backoff_ms}ms"
-          )
+        Logger.debug(
+          "[worker] register attempt #{attempt + 1} failed, " <>
+            "retry in #{backoff_ms}ms"
+        )
 
-          Process.send_after(self(), :connect_to_master, backoff_ms)
-          {:noreply, %{state | connection_attempt: state.connection_attempt + 1}}
-      end
+        Process.send_after(self(), :connect_to_master, backoff_ms)
+        {:noreply, %{state | connection_attempt: attempt + 1}}
     end
   end
 
