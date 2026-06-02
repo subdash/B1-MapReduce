@@ -111,125 +111,38 @@ defmodule MrMaster.Master do
 
   @impl true
   def handle_cast({:map_done, task_id, sender_node, bucket_locations}, state) do
-    is_not_stale =
-      state.map_tasks[task_id].assigned_to == sender_node or
-        state.backup_tasks[{:map, task_id}] == sender_node
-
-    if is_not_stale do
-      # If primary task is completed already, that means a backup map task
-      # just sent its :map_done message. We must mark the backup task as completed.
-      if state.map_tasks[task_id].status == :completed do
-        state =
-          case Map.fetch(state.backup_tasks, {:map, task_id}) do
-            {:ok, backup_node} ->
-              # Find worker assigned to backup task
-              %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
-
-              # Mark worker as idle in worker registry
-              state =
-                put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
-                  backup_worker
-                  | status: :idle
-                })
-
-              # Remove the task from backup_tasks
-              state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:map, task_id}))
-              assign_pending_tasks(state)
-
-            :error ->
-              state
-          end
-
+    cond do
+      # Drop completions that aren't from the task's current owner (see sender_owns_task?/4).
+      # The worker's intermediate output is unreachable and the task is already being re-run.
+      not sender_owns_task?(state, :map, task_id, sender_node) ->
+        Logger.debug("[master] stale map_done ignored | id=#{task_id} from=#{sender_node}")
         {:noreply, state}
-      else
-        # The primary (rather than backup) map task completed.
-        # Mark the task as completed in the map tasks dictionary.
-        %MrProtocol.MapTask{} = completed_task = state.map_tasks[task_id]
-        completed_task = %MrProtocol.MapTask{completed_task | status: :completed}
-        # Mark worker as idle
-        %MrProtocol.WorkerInfo{} = idle_worker = state.workers[completed_task.assigned_to]
 
-        idle_worker = %MrProtocol.WorkerInfo{
-          idle_worker
-          | status: :idle
-        }
+      # The primary already finished this task, so this is its backup straggler reporting in.
+      state.map_tasks[task_id].status == :completed ->
+        {:noreply, complete_backup_task(state, :map, task_id)}
 
-        # Update state with completed task, idle worker and bucket locations
-        state = put_in(state.map_tasks[task_id], completed_task)
-        state = put_in(state.intermediate_locations[task_id], bucket_locations)
-        state = put_in(state.workers[completed_task.assigned_to], idle_worker)
-        # Assign any pending map tasks
-        state = assign_pending_tasks(state)
-        state = maybe_start_reduce(state)
-
-        {:noreply, state}
-      end
-    else
-      Logger.debug("[master] stale map_done ignored | id=#{task_id} from=#{sender_node}")
-      {:noreply, state}
+      # Normal case: the assigned primary worker finished the task.
+      true ->
+        {:noreply, complete_primary_map_task(state, task_id, bucket_locations)}
     end
   end
 
   @impl true
   def handle_cast({:reduce_done, task_id, sender_node}, state) do
-    is_not_stale =
-      state.reduce_tasks[task_id].assigned_to == sender_node or
-        state.backup_tasks[{:reduce, task_id}] == sender_node
-
-    if is_not_stale do
-      if state.reduce_tasks[task_id].status == :completed do
-        state =
-          case Map.fetch(state.backup_tasks, {:reduce, task_id}) do
-            {:ok, backup_node} ->
-              %MrProtocol.WorkerInfo{} = backup_worker = state.workers[backup_node]
-
-              state =
-                put_in(state.workers[backup_node], %MrProtocol.WorkerInfo{
-                  backup_worker
-                  | status: :idle
-                })
-
-              state = Map.update!(state, :backup_tasks, &Map.delete(&1, {:reduce, task_id}))
-              assign_pending_tasks(state)
-
-            :error ->
-              state
-          end
-
+    cond do
+      # Drop completions that aren't from the task's current owner (see sender_owns_task?/4).
+      not sender_owns_task?(state, :reduce, task_id, sender_node) ->
+        Logger.debug("[master] stale reduce_done ignored | id=#{task_id} from=#{sender_node}")
         {:noreply, state}
-      else
-        %MrProtocol.ReduceTask{} = task = state.reduce_tasks[task_id]
-        %MrProtocol.WorkerInfo{} = worker = state.workers[task.assigned_to]
-        # Mark task as completed
-        state =
-          put_in(state.reduce_tasks[task_id], %MrProtocol.ReduceTask{task | status: :completed})
 
-        state = put_in(state.workers[worker.node], %MrProtocol.WorkerInfo{worker | status: :idle})
-        state = assign_pending_tasks(state)
+      # The primary already finished this task, so this is its backup straggler reporting in.
+      state.reduce_tasks[task_id].status == :completed ->
+        {:noreply, complete_backup_task(state, :reduce, task_id)}
 
-        reduce_phase_complete =
-          Enum.all?(Map.values(state.reduce_tasks), fn %MrProtocol.ReduceTask{} = reduce_task ->
-            reduce_task.status == :completed
-          end)
-
-        if reduce_phase_complete do
-          state = %{state | phase: :done}
-          duration = System.monotonic_time(:millisecond) - state.start_time
-
-          state =
-            log_event(
-              state,
-              "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
-            )
-
-          {:noreply, state}
-        else
-          {:noreply, state}
-        end
-      end
-    else
-      Logger.debug("[master] stale reduce_done ignored | id=#{task_id} from=#{sender_node}")
-      {:noreply, state}
+      # Normal case: the assigned primary worker finished the task.
+      true ->
+        {:noreply, complete_primary_reduce_task(state, task_id)}
     end
   end
 
@@ -374,6 +287,80 @@ defmodule MrMaster.Master do
   @impl true
   def handle_info(_status, state) do
     {:noreply, state}
+  end
+
+  # A task completion is only legitimate from the worker that *currently* owns the task —
+  # its assigned primary, or the backup launched for it as a straggler. This guards against
+  # a completion still in flight from a worker that has since died: node_down either requeues
+  # the task (clearing assigned_to) or reassigns it, so the sender no longer matches the owner.
+  # Such a message must be dropped — the on-disk output it refers to is on an unreachable node,
+  # and the task is already being re-run — otherwise we'd record a dead location and crash on
+  # the requeued (assigned_to: nil) case.
+  defp sender_owns_task?(state, :map, task_id, sender_node) do
+    state.map_tasks[task_id].assigned_to == sender_node or
+      state.backup_tasks[{:map, task_id}] == sender_node
+  end
+
+  defp sender_owns_task?(state, :reduce, task_id, sender_node) do
+    state.reduce_tasks[task_id].assigned_to == sender_node or
+      state.backup_tasks[{:reduce, task_id}] == sender_node
+  end
+
+  # The primary already completed; the backup straggler has now reported in. Free the backup
+  # worker and forget the backup bookkeeping. Identical for map and reduce, hence the `type`.
+  defp complete_backup_task(state, type, task_id) do
+    case Map.fetch(state.backup_tasks, {type, task_id}) do
+      {:ok, backup_node} ->
+        state = mark_worker_idle(state, backup_node)
+        state = Map.update!(state, :backup_tasks, &Map.delete(&1, {type, task_id}))
+        assign_pending_tasks(state)
+
+      :error ->
+        state
+    end
+  end
+
+  defp complete_primary_map_task(state, task_id, bucket_locations) do
+    %MrProtocol.MapTask{} = task = state.map_tasks[task_id]
+    completed_task = %MrProtocol.MapTask{task | status: :completed}
+
+    state = put_in(state.map_tasks[task_id], completed_task)
+    state = put_in(state.intermediate_locations[task_id], bucket_locations)
+    state = mark_worker_idle(state, completed_task.assigned_to)
+    state = assign_pending_tasks(state)
+    maybe_start_reduce(state)
+  end
+
+  defp complete_primary_reduce_task(state, task_id) do
+    %MrProtocol.ReduceTask{} = task = state.reduce_tasks[task_id]
+    completed_task = %MrProtocol.ReduceTask{task | status: :completed}
+
+    state = put_in(state.reduce_tasks[task_id], completed_task)
+    state = mark_worker_idle(state, completed_task.assigned_to)
+    state = assign_pending_tasks(state)
+
+    if reduce_phase_complete?(state), do: finish_job(state), else: state
+  end
+
+  defp reduce_phase_complete?(state) do
+    Enum.all?(Map.values(state.reduce_tasks), fn %MrProtocol.ReduceTask{} = task ->
+      task.status == :completed
+    end)
+  end
+
+  defp finish_job(state) do
+    state = %{state | phase: :done}
+    duration = System.monotonic_time(:millisecond) - state.start_time
+
+    log_event(
+      state,
+      "[master] job_complete | duration_ms=#{duration} map_tasks=#{map_size(state.map_tasks)} reduce_tasks=#{map_size(state.reduce_tasks)}"
+    )
+  end
+
+  defp mark_worker_idle(state, node) do
+    %MrProtocol.WorkerInfo{} = worker = state.workers[node]
+    put_in(state.workers[node], %MrProtocol.WorkerInfo{worker | status: :idle})
   end
 
   defp assign_backup_tasks(state, :map = type) do
