@@ -9,12 +9,19 @@ defmodule MrWorker.FileServer do
     {:ok, %{}}
   end
 
-  def handle_call({:fetch, file_path}, _from, state) do
+  def handle_call({:fetch, file_path}, from, state) do
     # Read file and return contents as binary
-    case File.read(file_path) do
-      {:ok, binary} -> {:reply, binary, state}
-      {:error, :enoent} -> {:reply, {:error, :not_found}, state}
-      _ -> {:reply, {:error, :unexpected}, state}
-    end
+    Task.start(fn ->
+      result =
+        case File.read(file_path) do
+          {:ok, binary} -> binary
+          {:error, :enoent} -> {:error, :not_found}
+          _ -> {:error, :unexpected}
+        end
+
+      GenServer.reply(from, result)
+    end)
+
+    {:noreply, state}
   end
 end

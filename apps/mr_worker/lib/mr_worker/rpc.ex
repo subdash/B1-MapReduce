@@ -14,6 +14,6 @@ defmodule MrWorker.RPC do
       Process.sleep(delay)
     end
 
-    GenServer.call({server, target_node}, message)
+    GenServer.call({server, target_node}, message, 30_000)
   end
 end
