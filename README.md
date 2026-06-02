@@ -1,4 +1,3 @@
-<img width="1256" height="1682" alt="B1 MapReduce phase diagram" src="https://github.com/user-attachments/assets/55687d70-f572-4a7d-bd75-2f37fac29b3b" />
 # Baby's First MapReduce
 
 This is an implementation of the MapReduce programming model as defined in the 2004 paper [_MapReduce: Simplified Data Processing on Large Clusters_](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf).
