@@ -1,8 +1,15 @@
 # Baby's First MapReduce
 
+## TL;DR
+This is an Elixir implementation of MapReduce, which is a framework developed by Google for processing large data sets. Map and reduce functions are defined for a task, input data is provided, and worker nodes join the single-master cluster. The map function processes data and writes the output to a file. The reduce function aggregates the output of the map tasks. In Google MapReduce, files are read from and written to a shared filesystem (GFS). In my implementation, input data is duplicated on each machine and output data is written to the local disk of the workers.
+
+## What this project is
+
 This is an implementation of the MapReduce programming model as defined in the 2004 paper [_MapReduce: Simplified Data Processing on Large Clusters_](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf).
 
-The framework runs MapReduce jobs on a cluster of Erlang nodes. It runs on a single machine for development and scales across multiple physical machines over a LAN with no code changes — workers are distributed Erlang nodes that connect to the master by name. The initial task is a word-frequency count across 20 large text files. A Phoenix LiveView dashboard provides real-time visualization of task progress across workers.
+The framework runs MapReduce jobs on a cluster of Erlang nodes. It runs on a single machine for development and scales across multiple physical machines over a LAN — workers are distributed Erlang nodes that connect to the master by name. The two tasks currently implemented are a word-frequency count and distributed grep. A Phoenix LiveView dashboard provides real-time visualization of task progress across workers.
+
+I created this project as a way to learn Elixir, Erlang OTP, and get my hands dirty with distributed systems. It was very satisfying to have the opportunity to apply a lot of the theory I learned from textbooks and research papers to a real system I designed and built.
 
 <img width="3456" height="2070" alt="demo_final_clip" src="https://github.com/user-attachments/assets/b58e05fb-096f-49fb-a896-3025df1f9107" />
 
@@ -28,11 +35,15 @@ Locality becomes important during the reduce phase since RPC calls between reduc
 
 ## Limitations, tradeoffs and improvements
 - **One map task per file**: A more efficient implementation would read byte ranges of a configurable size from files. This would reduce the chance of failure when processing large files and allow for much higher parallelism at the cost of the minor additional overhead of more map tasks to manage and more RPC calls during the reduce phase.
+- **Single master**: While faithful to the paper, the design choice of having a single master has obvious drawbacks, namely that if the master dies, all jobs that is orchestrating must be restarted and re-run from the beginning. Google decided that a master failure was rare enough to justify the single-master design.
 - **No distributed filesystem**: Real MapReduce reads input from and writes output to a shared distributed filesystem (GFS). This implementation has none, so input files must be present on every worker machine at the same path, and each reduce worker writes its final output to its own local disk. On a multi-machine run that leaves the output scattered across the worker machines (gather it with `scp`/`rsync`, or point `MR_WORKER_OUTPUT_DIR` at a shared mount); on a single-machine run it all lands in `output/`. That keeps a multi-machine run to zero shared infrastructure. See [`docs/MULTI_MACHINE_SETUP.md`](docs/MULTI_MACHINE_SETUP.md).
 - **Tasks are not configurable**: There is currently no mechanism to provide configuration for a task outside of the actual Elixir code that defines the task module. So for example, if I wanted the distributed grep job to search for a word other than "the", I would need to edit the Elixir code for that task. This creates an undesirable operational burden.
-- **Node distance is simulated**: A real implementation would assign reduce tasks based on how latent the RPC calls are rather than simulating distance between nodes via bogus coordinates.
+- **Node distance is simulated**: A real implementation would assign reduce tasks based on their relative distance in the network topology rather than simulating distance between nodes via bogus coordinates.
+- **Operator burden**: All machines running either the master or worker nodes must have the project cloned and the Elixir/Erlang dependencies installed. All processes are started manually. For me to set up a cluster, I had to clone the project on three different computers, install the same versions of dependencies on each one, manually discover the local hostnames for each and write out the correct commands to connect one node to another within the network. This process could be greatly simplified with an install script and a more user friendly run script. Node discovery would be a nice improvement too so that workers don't have to manually connect to the master. The current process is error prone and rather cumbersome.
 
 ## Prerequisites
+
+The following instructions describe how to run a MapReduce task on a single machine. For multi-machine setup instructions, see [here](docs/MULTI_MACHINE_SETUP.md).
 
 - **Elixir 1.20-rc** on **Erlang/OTP 29** — the exact versions are pinned in `.tool-versions`; with [asdf](https://asdf-vm.com) installed, run `asdf install` to match them.
 - **Python 3.x** (for generating sample data)
@@ -48,7 +59,7 @@ Generate 20 sample text files (~1 GB total) using the included Python script:
 python3 scripts/generate_data.py
 ```
 
-This creates `sample-data/document_01.txt` through `document_20.txt`, each containing 700k–1.2M lines of randomly selected words. The script takes a few minutes to complete. It is seeded, so every run — and every machine — produces an identical dataset; pass a different seed with `python3 scripts/generate_data.py <seed>` if you want different data.
+This creates `sample-data/document_01.txt` through `document_20.txt`, each containing 700k–1.2M lines of randomly selected words. The script may take a few minutes to complete. It is seeded, so every run — and every machine — produces an identical dataset; pass a different seed with `python3 scripts/generate_data.py <seed>` if you want different data.
 
 ### 2. Install Dependencies
 
@@ -87,4 +98,4 @@ The same code runs as a real cluster across several machines with no changes: st
 
 ## AI disclaimer
 
-Claude Code was used in the development of this project for the following tasks. Almost all of the worker, master and protocol code was written by hand. The dashboard code was mainly written by an LLM. The documentation here (in the README) was written by hand with the assistance of an LLM, while the implementation plans in the docs folder were written entirely by an LLM. Additionally, once the master/worker/protocol code was complete, heavy LLM usage was utilized in order to orchestrate creating a cluster and running a job (cf. mr.start mix task).
+Claude Code was used to code most of the LiveView dashboard and a small portion of the worker/protocol/master code, as well as to improve documentation. Since the whole point of this project was to learn Elixir and learn about distributed systems, Claude was utilized mainly for educational purposes rather than speed of development.
