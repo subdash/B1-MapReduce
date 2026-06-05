@@ -43,9 +43,13 @@ count it toward the total.)
   asdf can't find the exact Elixir build string, list options with
   `asdf list-all elixir | grep 1.20` and adjust the `elixir` line in `.tool-versions`.
 - **Input must be reachable by each worker.** Map workers read input files from the
-  `--input` path locally, so that path must exist on **every** machine running a worker
-  (copy `sample-data/` to each, or use an identical path). Only *final output* is
-  centralized on the master; input is read locally.
+  `--input` path locally, so that path must exist on **every** machine running a worker —
+  and on the master, which lists the directory to split the job into map tasks. Either copy
+  `sample-data/` to an **identical path** on each machine, or put it on a **shared mount**
+  (NFS, `/Volumes/shared`, …) mounted at that same path everywhere — to a node a shared mount
+  reads transparently, exactly like a local file (`File.read!` works on the path; it neither
+  knows nor cares that the bytes arrive over the network). Final output works the same way —
+  see [Where data lives](#where-data-lives).
 
 ## 2. Network
 
@@ -135,16 +139,19 @@ reducer — so they're spread across the workers. Gather them with `scp`/`rsync`
 
 ## Where data lives
 
-A run produces two kinds of files in two very different places:
+A run produces three kinds of files in different places:
 
 | Data | Written by | Lives on | Shared? |
 |---|---|---|---|
+| **Input** (source files) | you (pre-staged before the run) | each worker's disk at the `--input` path (+ the master) | **Optional** — a shared mount works, mounted at the same path everywhere |
 | **Intermediate** (map output buckets) | map workers | each worker's **local** disk | **Never** — RPC-fetched on demand |
-| **Final output** (reduce results) | reduce workers → master | the **master's** disk | n/a (single destination) |
+| **Final output** (reduce results) | reduce workers | each reduce worker's **local** disk | **Optional** — a shared mount collects it in one place |
 
-The asymmetry is deliberate and traces directly to the paper (Dean & Ghemawat,
-sections 3.1–3.4): intermediate data stays local and is pulled by reducers; final
-output is collected in one place.
+Input and final output can each *optionally* live on a shared mount (same path on every
+machine), in which case reads and writes are transparent and results land in one directory.
+Intermediate data, by contrast, **must** stay node-local: that's what makes a dead worker's
+data unreachable and triggers the master to re-run its map tasks (Dean & Ghemawat,
+sections 3.1–3.4).
 
 ---
 
